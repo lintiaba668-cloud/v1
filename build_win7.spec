@@ -6,26 +6,45 @@ block_cipher = None
 
 base = Path('.')
 
-added_files = []
 
-engine = base / 'engine'
-if engine.exists():
-    added_files.append((str(engine), 'engine'))
+def add_dir(path, target):
+    if path.exists():
+        return [(str(path), target)]
+    return []
+
+
+datas = []
+datas += add_dir(base / 'engine', 'engine')
+datas += add_dir(base / 'config', 'config')
+
+hiddenimports = [
+    'PyQt5',
+    'PyQt5.QtWidgets',
+    'PyQt5.QtCore',
+    'PyQt5.QtGui',
+    'openpyxl',
+    'PIL',
+    'ocr.ocr_engine',
+    'ocr.pipeline_ocr',
+    'ocr.field_region_v28',
+    'ocr.text_parser',
+    'core.startup_check',
+    'core.final_runner'
+]
 
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=[str(base)],
     binaries=[],
-    datas=added_files,
-    hiddenimports=[
-        'PyQt5',
-        'openpyxl',
-        'PIL'
-    ],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'paddleocr',
+        'paddlepaddle'
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
