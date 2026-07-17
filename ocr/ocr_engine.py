@@ -1,12 +1,12 @@
 """
 OCR识别引擎接口
-优化版：接入图片预处理和OCR结果解析流程
+优化版：接入图片预处理和本地OCR调用
 """
 
 from pathlib import Path
 
 from .text_parser import parse_report_text
-from .image_preprocess import preprocess, crop_header
+from .image_preprocess import preprocess
 
 
 class OCREngine:
@@ -14,24 +14,32 @@ class OCREngine:
         self.enabled = True
         self.last_error = ''
 
+    def _run_ocr(self, image_path):
+        """调用本地OCR，失败时返回空文本。"""
+        try:
+            import pytesseract
+            from PIL import Image
+
+            text = pytesseract.image_to_string(
+                Image.open(image_path),
+                lang='chi_sim+eng'
+            )
+            return text
+        except Exception as e:
+            self.last_error = str(e)
+            return ''
+
     def recognize(self, image_path):
         """
-        OCR入口。
-       
-        当前先完成流程接通：
-        图片预处理 -> OCR调用 -> 文本解析。
-        后续可替换具体OCR引擎，不影响上层流程。
+        图片预处理 -> OCR -> 字段解析
         """
-        try:
-            image_path = Path(image_path)
-            temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
+        image_path = Path(image_path)
+        temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
 
+        try:
             preprocess(str(image_path), str(temp_path))
 
-            # OCR引擎接口位置
-            # 后续接入PaddleOCR/Tesseract时只替换这里
-            raw_text = ''
-
+            raw_text = self._run_ocr(str(temp_path))
             result = parse_report_text(raw_text)
 
             return {
