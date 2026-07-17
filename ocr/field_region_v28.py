@@ -13,22 +13,27 @@ STOP_WORDS = [
     '施工单位',
     '监理单位',
     '验收日期',
-    '负责人'
+    '负责人',
+    '开工日期'
 ]
 
 
 def _sort_items(items):
-    """OCR结果按页面阅读顺序排序"""
+    """OCR结果按阅读顺序排序"""
     return sorted(items, key=lambda x: (x.get('y', 0), x.get('x', 0)))
+
+
+def _same_line(y1, y2, limit=60):
+    return abs(y1 - y2) <= limit
 
 
 def locate_field_area(ocr_items, field_type):
     """
-    提取字段右侧完整区域。
+    根据字段坐标提取右侧内容。
 
     支持：
-    - 多行工程名称
-    - 工程编号后带 -6/-11/-12 等格式
+    - 工程名称多行合并
+    - 工程编号 -6/-11/-12
     - OCR坐标轻微偏移
     """
     result = []
@@ -55,10 +60,21 @@ def locate_field_area(ocr_items, field_type):
             if any(stop in target_text for stop in STOP_WORDS):
                 break
 
-            # 同行右侧或下一行同区域
-            if tx > base_x and abs(ty - base_y) < 120:
-                candidates.append(target_text)
+            # 字段右侧，同一行
+            if tx > base_x and _same_line(ty, base_y):
+                candidates.append(target)
+                continue
 
-        result.extend(candidates)
+            # 下一行：允许进入同一个表格单元格
+            if tx >= base_x - 30 and 0 < ty - base_y < 180:
+                candidates.append(target)
+
+        candidates = sorted(candidates, key=lambda x: (x.get('y', 0), x.get('x', 0)))
+        result.extend([x.get('text', '') for x in candidates])
 
     return result
+
+
+def merge_field_text(items):
+    """合并多行字段文本"""
+    return ''.join([x for x in items if x])
