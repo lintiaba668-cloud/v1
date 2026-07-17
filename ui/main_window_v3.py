@@ -1,8 +1,9 @@
 """
 PowerRename V1 主窗口最终连接版
+Win7兼容版：PyQt5
 """
 
-from PySide6.QtWidgets import QMainWindow, QFileDialog
+from PyQt5.QtWidgets import QMainWindow, QFileDialog
 
 from core.final_runner import FinalRunner
 from ui.log_manager import LogManager
