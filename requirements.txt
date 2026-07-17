@@ -1,0 +1,6 @@
+PySide6
+paddleocr
+paddlepaddle
+opencv-python
+openpyxl
+Pillow
