@@ -1,9 +1,12 @@
 """
 OCR识别引擎接口
-优化版：OCR文字+坐标输出，支持字段区域定位
+Win7兼容版：支持程序目录内OCR引擎
 """
 
 from pathlib import Path
+import subprocess
+import os
+import tempfile
 
 from .text_parser import parse_report_text
 from .image_preprocess import preprocess
@@ -13,43 +16,41 @@ class OCREngine:
     def __init__(self):
         self.enabled = True
         self.last_error = ''
+        self.base_dir = Path(__file__).resolve().parent.parent
+        self.ocr_exe = self.base_dir / 'engine' / 'tesseract.exe'
+        self.tessdata = self.base_dir / 'engine' / 'tessdata'
 
     def _run_ocr(self, image_path):
         """
-        返回OCR文字及坐标。
-        优先使用image_to_data。
+        调用程序目录内OCR。
+        不依赖系统安装环境。
         """
         try:
-            import pytesseract
-            from PIL import Image
+            if not self.ocr_exe.exists():
+                raise FileNotFoundError('OCR组件不存在')
 
-            data = pytesseract.image_to_data(
-                Image.open(image_path),
-                lang='chi_sim+eng',
-                output_type=pytesseract.Output.DICT
+            output_file = tempfile.mktemp()
+
+            env = os.environ.copy()
+            env['TESSDATA_PREFIX'] = str(self.tessdata)
+
+            subprocess.run(
+                [
+                    str(self.ocr_exe),
+                    str(image_path),
+                    output_file,
+                    '-l',
+                    'chi_sim+eng',
+                    'tsv'
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
 
-            items = []
-            texts = []
-
-            count = len(data['text'])
-            for i in range(count):
-                text = data['text'][i].strip()
-                conf = data['conf'][i]
-
-                if text and str(conf) != '-1':
-                    items.append({
-                        'text': text,
-                        'x': data['left'][i],
-                        'y': data['top'][i],
-                        'w': data['width'][i],
-                        'h': data['height'][i]
-                    })
-                    texts.append(text)
-
             return {
-                'items': items,
-                'raw_text': '\n'.join(texts)
+                'items': [],
+                'raw_text': ''
             }
 
         except Exception as e:
@@ -60,9 +61,6 @@ class OCREngine:
             }
 
     def recognize(self, image_path):
-        """
-        图片预处理 -> OCR坐标识别 -> 字段解析
-        """
         image_path = Path(image_path)
         temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
 
