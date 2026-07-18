@@ -3,6 +3,8 @@ V2.8 字段区域OCR定位模块
 优化版：针对电力工程报告表格字段右侧内容提取
 """
 
+import re
+
 FIELD_MAP = {
     'project_code': ['工程编号', '项目编号', '编号'],
     'project_name': ['工程名称', '项目名称']
@@ -14,12 +16,13 @@ STOP_WORDS = [
     '监理单位',
     '验收日期',
     '负责人',
-    '开工日期'
+    '开工日期',
+    '工程编号',
+    '项目编号'
 ]
 
 
 def _sort_items(items):
-    """OCR结果按阅读顺序排序"""
     return sorted(items, key=lambda x: (x.get('y', 0), x.get('x', 0)))
 
 
@@ -27,15 +30,12 @@ def _same_line(y1, y2, limit=60):
     return abs(y1 - y2) <= limit
 
 
-def locate_field_area(ocr_items, field_type):
-    """
-    根据字段坐标提取右侧内容。
+def _clean_code(text):
+    """工程编号清理，保留英文数字和连接符"""
+    return re.sub(r'[^A-Za-z0-9\-]', '', text)
 
-    支持：
-    - 工程名称多行合并
-    - 工程编号 -6/-11/-12
-    - OCR坐标轻微偏移
-    """
+
+def locate_field_area(ocr_items, field_type):
     result = []
     items = _sort_items(ocr_items)
 
@@ -43,13 +43,11 @@ def locate_field_area(ocr_items, field_type):
 
     for index, item in enumerate(items):
         text = item.get('text', '')
-
         if not any(k in text for k in keys):
             continue
 
         base_x = item.get('x', 0)
         base_y = item.get('y', 0)
-
         candidates = []
 
         for target in items[index + 1:]:
@@ -60,17 +58,21 @@ def locate_field_area(ocr_items, field_type):
             if any(stop in target_text for stop in STOP_WORDS):
                 break
 
-            # 字段右侧，同一行
             if tx > base_x and _same_line(ty, base_y):
                 candidates.append(target)
                 continue
 
-            # 下一行：允许进入同一个表格单元格
             if tx >= base_x - 30 and 0 < ty - base_y < 180:
                 candidates.append(target)
 
         candidates = sorted(candidates, key=lambda x: (x.get('y', 0), x.get('x', 0)))
-        result.extend([x.get('text', '') for x in candidates])
+
+        for candidate in candidates:
+            value = candidate.get('text', '')
+            if field_type == 'project_code':
+                value = _clean_code(value)
+            if value:
+                result.append(value)
 
     return result
 
