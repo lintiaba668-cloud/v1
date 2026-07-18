@@ -41,7 +41,6 @@ def _clean_name(text):
 
     text = text.replace(' ', '')
     text = text.replace('\n', '')
-
     text = text.replace('工程名称', '')
     text = text.replace('项目名称', '')
 
@@ -71,12 +70,10 @@ def locate_field_area(ocr_items, field_type):
             if any(stop in target_text for stop in STOP_WORDS):
                 break
 
-            # 同行字段
             if tx > base_x and _same_line(ty, base_y):
                 candidates.append(target)
                 continue
 
-            # 多行工程名称
             if field_type == 'project_name':
                 if tx >= base_x - 50 and 0 < ty - base_y < 220:
                     candidates.append(target)
@@ -102,5 +99,29 @@ def locate_field_area(ocr_items, field_type):
 
 
 def merge_field_text(items):
-    """合并多行字段文本，保持工程编号和特殊符号"""
-    return ''.join([x for x in items if x])
+    """
+    合并多行工程名称。
+    根据OCR分块情况添加必要分隔，避免两个字段块粘连。
+    """
+    result = ''
+
+    for item in items:
+        if not item:
+            continue
+
+        if not result:
+            result = item
+            continue
+
+        # 同一工程名称连续块之间增加空格
+        # 避免出现：杆035B分界开关
+        if result[-1].isdigit() and item[0].isdigit():
+            result += ' '
+        elif result[-1].isalpha() and item[0].isdigit():
+            result += ' '
+        elif result[-1] == '杆' and item[0].isdigit():
+            result += ' '
+        else:
+            result += item
+
+    return result
