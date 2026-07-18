@@ -31,8 +31,21 @@ def _same_line(y1, y2, limit=60):
 
 
 def _clean_code(text):
-    """工程编号清理，保留英文数字和连接符"""
     return re.sub(r'[^A-Za-z0-9\-]', '', text)
+
+
+def _clean_name(text):
+    """工程名称清理，保留编号、井号、括号等有效字符"""
+    if not text:
+        return ''
+
+    text = text.replace(' ', '')
+    text = text.replace('\n', '')
+
+    text = text.replace('工程名称', '')
+    text = text.replace('项目名称', '')
+
+    return text.strip('：:，,。')
 
 
 def locate_field_area(ocr_items, field_type):
@@ -58,9 +71,16 @@ def locate_field_area(ocr_items, field_type):
             if any(stop in target_text for stop in STOP_WORDS):
                 break
 
+            # 同行字段
             if tx > base_x and _same_line(ty, base_y):
                 candidates.append(target)
                 continue
+
+            # 多行工程名称
+            if field_type == 'project_name':
+                if tx >= base_x - 50 and 0 < ty - base_y < 220:
+                    candidates.append(target)
+                    continue
 
             if tx >= base_x - 30 and 0 < ty - base_y < 180:
                 candidates.append(target)
@@ -69,8 +89,12 @@ def locate_field_area(ocr_items, field_type):
 
         for candidate in candidates:
             value = candidate.get('text', '')
+
             if field_type == 'project_code':
                 value = _clean_code(value)
+            else:
+                value = _clean_name(value)
+
             if value:
                 result.append(value)
 
@@ -78,5 +102,5 @@ def locate_field_area(ocr_items, field_type):
 
 
 def merge_field_text(items):
-    """合并多行字段文本"""
+    """合并多行字段文本，保持工程编号和特殊符号"""
     return ''.join([x for x in items if x])
