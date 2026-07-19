@@ -1,12 +1,8 @@
 """
 OCR完整处理链
-图片 -> OCR文字+坐标 -> 工程信息
+图片 -> OCR -> 工程信息 -> 文件命名模块
 
-PowerRename V1
-生产级处理逻辑：
-1. 优先使用字段区域定位识别竣工验收报告
-2. 开工报告使用全文模板解析
-3. 任一识别链失败自动降级
+保持原OCR识别逻辑不变，仅增加统一业务输出字段。
 """
 
 import traceback
@@ -16,19 +12,13 @@ from .text_parser import parse_report_text
 from .field_region_v28 import locate_field_area, merge_field_text
 
 
-class OCRPipeline:
-    """OCR业务处理主入口"""
+class OCRPipeline(object):
+    """OCR业务处理主入口。"""
 
     def __init__(self):
         self.engine = OCREngine()
 
     def _extract_region_result(self, items):
-        """
-        基于OCR坐标结果提取表格字段。
-
-        主要用于竣工验收报告：
-        工程名称 + 工程编号。
-        """
         try:
             name_items = locate_field_area(items, 'project_name')
             code_items = locate_field_area(items, 'project_code')
@@ -38,7 +28,6 @@ class OCRPipeline:
                 'project_code': ''.join(code_items),
                 'source': 'field_region'
             }
-
         except Exception:
             return {
                 'project_name': '',
@@ -46,13 +35,22 @@ class OCRPipeline:
                 'source': 'field_region_error'
             }
 
-    def _merge_result(self, region, parsed):
-        """
-        合并字段定位结果和全文解析结果。
+    def _detect_report_type(self, data, text):
+        """判断报告类型。
 
-        原则：
-        坐标结果优先；文本解析作为备用。
+        当前软件只支持两类：
+        start  开工报告
+        finish 竣工验收报告
         """
+        if data.get('project_code'):
+            return 'finish'
+
+        if '我方完成' in text or '项目开工前' in text:
+            return 'start'
+
+        return ''
+
+    def _merge_result(self, region, parsed):
         return {
             'project_name': region.get('project_name') or parsed.get('project_name', ''),
             'project_code': region.get('project_code') or parsed.get('project_code', ''),
@@ -60,18 +58,6 @@ class OCRPipeline:
         }
 
     def process(self, image):
-        """
-        OCR主流程。
-
-        参数：
-            image: 图片路径
-
-        返回：
-            text: OCR全文
-            data: 工程字段
-            valid: 是否成功识别
-            items: OCR坐标信息
-        """
         try:
             result = self.engine.recognize(image)
 
@@ -89,15 +75,14 @@ class OCRPipeline:
 
             region_result = self._extract_region_result(items)
             parsed_result = parse_report_text(text)
-
             data = self._merge_result(region_result, parsed_result)
 
-            valid = bool(data.get('project_name'))
+            data['report_type'] = self._detect_report_type(data, text)
 
             return {
                 'text': text,
                 'data': data,
-                'valid': valid,
+                'valid': bool(data.get('project_name')),
                 'items': items,
                 'error': ''
             }
