@@ -13,26 +13,28 @@ import logging
 from .text_parser import parse_report_text
 from .image_preprocess import preprocess
 from core.resource import get_resource_path
+from core.error_code import ErrorCode
 
 
 logger = logging.getLogger(__name__)
 
 
 class OCREngine:
-    """PowerRename OCR engine.
-
-    Responsible for launching bundled tesseract and parsing TSV output.
-    """
 
     def __init__(self):
         self.enabled = True
         self.last_error = ''
+        self.error_code = ErrorCode.SUCCESS
+        self.status = 'INIT'
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
+        self.status = 'CHECKING'
         self._validate_engine()
 
+        if self.enabled:
+            self.status = 'READY'
+
     def _validate_engine(self):
-        """Validate bundled OCR runtime files."""
         required_files = [
             self.ocr_exe,
             self.tessdata / 'chi_sim.traineddata',
@@ -43,8 +45,10 @@ class OCREngine:
 
         if missing:
             self.enabled = False
+            self.status = 'FAILED'
+            self.error_code = ErrorCode.ENGINE_MISSING
             self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
-            logger.error(self.last_error)
+            logger.error('[%s] %s', self.error_code, self.last_error)
 
     def _parse_tsv(self, tsv_file):
         items = []
@@ -68,8 +72,9 @@ class OCREngine:
                         texts.append(text)
 
         except Exception as e:
+            self.error_code = ErrorCode.OCR_PARSE_FAILED
             self.last_error = str(e)
-            logger.exception('TSV解析失败')
+            logger.exception('[%s] TSV解析失败', self.error_code)
 
         return {
             'items': items,
@@ -83,11 +88,7 @@ class OCREngine:
         temp_file = None
 
         try:
-            if not self.ocr_exe.exists():
-                raise FileNotFoundError('OCR组件不存在')
-
-            logger.info('OCR启动: %s', self.ocr_exe)
-            logger.info('OCR图片: %s', image_path)
+            self.status = 'RUNNING'
 
             with tempfile.NamedTemporaryFile(delete=False) as f:
                 temp_file = f.name
@@ -111,26 +112,34 @@ class OCREngine:
             )
 
             if result.returncode != 0:
+                self.error_code = ErrorCode.OCR_EXEC_FAILED
                 error = result.stderr.decode('utf-8', errors='ignore')
-                raise RuntimeError('Tesseract失败: ' + error)
+                raise RuntimeError(error)
 
             return self._parse_tsv(temp_file + '.tsv')
 
         except subprocess.TimeoutExpired:
+            self.status = 'FAILED'
+            self.error_code = ErrorCode.OCR_TIMEOUT
             self.last_error = 'OCR执行超时'
-            logger.error(self.last_error)
+            logger.error('[%s] %s', self.error_code, self.last_error)
             return {'items': [], 'raw_text': ''}
 
         except Exception as e:
+            self.status = 'FAILED'
             self.last_error = str(e)
-            logger.exception('OCR执行失败')
+            logger.exception('[%s] OCR执行失败', self.error_code)
             return {'items': [], 'raw_text': ''}
 
         finally:
             if temp_file:
                 try:
-                    Path(temp_file).unlink(missing_ok=True)
-                    Path(temp_file + '.tsv').unlink(missing_ok=True)
+                    temp = Path(temp_file)
+                    if temp.exists():
+                        temp.unlink()
+                    tsv = Path(temp_file + '.tsv')
+                    if tsv.exists():
+                        tsv.unlink()
                 except Exception:
                     pass
 
@@ -142,16 +151,21 @@ class OCREngine:
             preprocess(str(image_path), str(temp_path))
             ocr_result = self._run_ocr(str(temp_path))
             result = parse_report_text(ocr_result['raw_text'])
+            self.status = 'FINISHED'
 
             return {
                 'image': str(image_path),
                 'raw_text': ocr_result['raw_text'],
                 'items': ocr_result['items'],
                 'project_name': result.get('project_name', ''),
-                'project_code': result.get('project_code', '')
+                'project_code': result.get('project_code', ''),
+                'status': self.status,
+                'error_code': self.error_code,
+                'error_message': self.last_error
             }
 
         except Exception as e:
+            self.status = 'FAILED'
             self.last_error = str(e)
             logger.exception('识别失败')
             return {
@@ -159,7 +173,10 @@ class OCREngine:
                 'raw_text': '',
                 'items': [],
                 'project_name': '',
-                'project_code': ''
+                'project_code': '',
+                'status': self.status,
+                'error_code': self.error_code,
+                'error_message': self.last_error
             }
 
     def parse_text(self, text):
