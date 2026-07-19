@@ -8,18 +8,43 @@ import subprocess
 import os
 import tempfile
 import csv
+import logging
 
 from .text_parser import parse_report_text
 from .image_preprocess import preprocess
 from core.resource import get_resource_path
 
 
+logger = logging.getLogger(__name__)
+
+
 class OCREngine:
+    """PowerRename OCR engine.
+
+    Responsible for launching bundled tesseract and parsing TSV output.
+    """
+
     def __init__(self):
         self.enabled = True
         self.last_error = ''
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
+        self._validate_engine()
+
+    def _validate_engine(self):
+        """Validate bundled OCR runtime files."""
+        required_files = [
+            self.ocr_exe,
+            self.tessdata / 'chi_sim.traineddata',
+            self.tessdata / 'eng.traineddata'
+        ]
+
+        missing = [str(p) for p in required_files if not p.exists()]
+
+        if missing:
+            self.enabled = False
+            self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
+            logger.error(self.last_error)
 
     def _parse_tsv(self, tsv_file):
         items = []
@@ -44,6 +69,7 @@ class OCREngine:
 
         except Exception as e:
             self.last_error = str(e)
+            logger.exception('TSV解析失败')
 
         return {
             'items': items,
@@ -51,30 +77,62 @@ class OCREngine:
         }
 
     def _run_ocr(self, image_path):
+        if not self.enabled:
+            return {'items': [], 'raw_text': ''}
+
+        temp_file = None
+
         try:
             if not self.ocr_exe.exists():
                 raise FileNotFoundError('OCR组件不存在')
 
-            output_file = tempfile.mktemp()
-            tsv_file = output_file + '.tsv'
+            logger.info('OCR启动: %s', self.ocr_exe)
+            logger.info('OCR图片: %s', image_path)
+
+            with tempfile.NamedTemporaryFile(delete=False) as f:
+                temp_file = f.name
 
             env = os.environ.copy()
             env['TESSDATA_PREFIX'] = str(self.tessdata)
 
-            subprocess.run([
-                str(self.ocr_exe),
-                str(image_path),
-                output_file,
-                '-l',
-                'chi_sim+eng',
-                'tsv'
-            ], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            result = subprocess.run(
+                [
+                    str(self.ocr_exe),
+                    str(image_path),
+                    temp_file,
+                    '-l',
+                    'chi_sim+eng',
+                    'tsv'
+                ],
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60
+            )
 
-            return self._parse_tsv(tsv_file)
+            if result.returncode != 0:
+                error = result.stderr.decode('utf-8', errors='ignore')
+                raise RuntimeError('Tesseract失败: ' + error)
+
+            return self._parse_tsv(temp_file + '.tsv')
+
+        except subprocess.TimeoutExpired:
+            self.last_error = 'OCR执行超时'
+            logger.error(self.last_error)
+            return {'items': [], 'raw_text': ''}
 
         except Exception as e:
             self.last_error = str(e)
+            logger.exception('OCR执行失败')
             return {'items': [], 'raw_text': ''}
+
+        finally:
+            if temp_file:
+                try:
+                    Path(temp_file).unlink(missing_ok=True)
+                    Path(temp_file + '.tsv').unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     def recognize(self, image_path):
         image_path = Path(image_path)
@@ -95,6 +153,7 @@ class OCREngine:
 
         except Exception as e:
             self.last_error = str(e)
+            logger.exception('识别失败')
             return {
                 'image': str(image_path),
                 'raw_text': '',
