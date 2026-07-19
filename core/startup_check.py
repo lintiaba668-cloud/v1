@@ -5,6 +5,11 @@
 """
 
 from core.resource import get_resource_path
+from core.error_code import ErrorCode
+from core.logger import get_logger
+
+
+logger = get_logger("Startup")
 
 
 class StartupCheck:
@@ -12,6 +17,22 @@ class StartupCheck:
 
     def __init__(self):
         self.errors = []
+
+    def add_error(self, code, message, detail=""):
+        error = {
+            "code": code,
+            "message": message,
+            "detail": detail
+        }
+
+        self.errors.append(error)
+
+        logger.error(
+            "[%s] %s | %s",
+            code,
+            message,
+            detail
+        )
 
     def check_ocr(self):
         """检查内置Tesseract及语言包"""
@@ -25,13 +46,17 @@ class StartupCheck:
         )
 
         if not ocr_exe.exists():
-            self.errors.append(
-                'OCR组件缺失:tesseract.exe，请重新安装完整版本'
+            self.add_error(
+                ErrorCode.ENGINE_MISSING,
+                "OCR engine missing",
+                str(ocr_exe)
             )
 
         if not tessdata.exists():
-            self.errors.append(
-                'OCR语言包目录缺失，请重新安装完整版本'
+            self.add_error(
+                ErrorCode.LANGUAGE_DATA_MISSING,
+                "OCR language directory missing",
+                str(tessdata)
             )
             return
 
@@ -44,8 +69,10 @@ class StartupCheck:
             path = tessdata / filename
 
             if not path.exists():
-                self.errors.append(
-                    f'OCR语言包缺失:{filename}'
+                self.add_error(
+                    ErrorCode.LANGUAGE_DATA_MISSING,
+                    "OCR language data missing",
+                    filename
                 )
 
     def check_directory(self):
@@ -60,9 +87,17 @@ class StartupCheck:
                         parents=True,
                         exist_ok=True
                     )
-                except Exception:
-                    self.errors.append(
-                        f'无法创建目录:{folder}'
+
+                    logger.info(
+                        "Created directory: %s",
+                        folder
+                    )
+
+                except Exception as e:
+                    self.add_error(
+                        ErrorCode.OUTPUT_FAILED,
+                        "Cannot create directory",
+                        str(e)
                     )
 
     def check_write_permission(self):
@@ -77,15 +112,21 @@ class StartupCheck:
                 'ok',
                 encoding='utf-8'
             )
-            test_file.unlink()
 
-        except Exception:
-            self.errors.append(
-                '程序目录无写入权限，请移动到可写目录'
+            if test_file.exists():
+                test_file.unlink()
+
+        except Exception as e:
+            self.add_error(
+                ErrorCode.OUTPUT_FAILED,
+                "No write permission",
+                str(e)
             )
 
     def run(self):
         self.errors = []
+
+        logger.info("Startup check begin")
 
         try:
             self.check_ocr()
@@ -93,11 +134,23 @@ class StartupCheck:
             self.check_write_permission()
 
         except Exception as e:
-            self.errors.append(
-                f'启动检测异常:{str(e)}'
+            self.add_error(
+                ErrorCode.CONFIG_ERROR,
+                "Startup check exception",
+                str(e)
+            )
+
+        success = len(self.errors) == 0
+
+        if success:
+            logger.info("Startup check passed")
+        else:
+            logger.error(
+                "Startup check failed: %s errors",
+                len(self.errors)
             )
 
         return {
-            'ok': len(self.errors) == 0,
+            'ok': success,
             'errors': self.errors
         }
