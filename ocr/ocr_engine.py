@@ -12,6 +12,7 @@ from .image_preprocess import preprocess
 from .ocr_executor import OCRExecutor
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
+from core.status import OCRStatus
 
 
 logger = logging.getLogger("PowerRename.OCR")
@@ -23,23 +24,18 @@ class OCREngine:
         self.enabled = True
         self.last_error = ''
         self.error_code = ErrorCode.SUCCESS
-        self.status = 'INIT'
+        self.status = OCRStatus.INIT
 
         self.executor = OCRExecutor()
 
-        self.ocr_exe = get_resource_path(
-            'engine/tesseract.exe'
-        )
+        self.ocr_exe = get_resource_path('engine/tesseract.exe')
+        self.tessdata = get_resource_path('engine/tessdata')
 
-        self.tessdata = get_resource_path(
-            'engine/tessdata'
-        )
-
-        self.status = 'CHECKING'
+        self.status = OCRStatus.CHECKING
         self._validate_engine()
 
         if self.enabled:
-            self.status = 'READY'
+            self.status = OCRStatus.READY
 
     def _validate_engine(self):
         required = [
@@ -56,7 +52,7 @@ class OCREngine:
 
         if missing:
             self.enabled = False
-            self.status = 'FAILED'
+            self.status = OCRStatus.FAILED
             self.error_code = ErrorCode.ENGINE_MISSING
             self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
             logger.error('[%s] %s', self.error_code, self.last_error)
@@ -96,58 +92,37 @@ class OCREngine:
     def _run_ocr(self, image_path):
 
         if not self.enabled:
-            return {
-                'items': [],
-                'raw_text': ''
-            }
+            return {'items': [], 'raw_text': ''}
 
-        self.status = 'RUNNING'
+        self.status = OCRStatus.RUNNING
 
         result = self.executor.execute(image_path)
 
         if not result['success']:
-            self.status = 'FAILED'
+            self.status = OCRStatus.FAILED
             self.error_code = result['error_code']
             self.last_error = result['error_message']
-
-            return {
-                'items': [],
-                'raw_text': ''
-            }
+            return {'items': [], 'raw_text': ''}
 
         return self._parse_tsv(result['tsv_file'])
 
     def recognize(self, image_path):
 
         image_path = Path(image_path)
-        temp_path = image_path.with_name(
-            image_path.stem + '_ocr.jpg'
-        )
+        temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
 
         try:
-            logger.info(
-                'preprocess start: %s',
-                image_path
-            )
+            logger.info('preprocess start: %s', image_path)
 
-            preprocess(
-                str(image_path),
-                str(temp_path)
-            )
+            preprocess(str(image_path), str(temp_path))
 
-            logger.info(
-                'preprocess finished: %s',
-                temp_path
-            )
+            logger.info('preprocess finished: %s', temp_path)
 
             ocr_result = self._run_ocr(str(temp_path))
+            result = parse_report_text(ocr_result['raw_text'])
 
-            result = parse_report_text(
-                ocr_result['raw_text']
-            )
-
-            if self.status != 'FAILED':
-                self.status = 'FINISHED'
+            if self.status != OCRStatus.FAILED:
+                self.status = OCRStatus.FINISHED
 
             return {
                 'image': str(image_path),
@@ -161,14 +136,11 @@ class OCREngine:
             }
 
         except Exception as exc:
-            self.status = 'FAILED'
+            self.status = OCRStatus.FAILED
             self.error_code = ErrorCode.IMAGE_PREPROCESS_FAILED
             self.last_error = str(exc)
 
-            logger.exception(
-                '[%s] 图片处理失败',
-                self.error_code
-            )
+            logger.exception('[%s] 图片处理失败', self.error_code)
 
             return {
                 'image': str(image_path),
@@ -185,15 +157,9 @@ class OCREngine:
             try:
                 if temp_path.exists():
                     temp_path.unlink()
-                    logger.debug(
-                        'removed temp file: %s',
-                        temp_path
-                    )
+                    logger.debug('removed temp file: %s', temp_path)
             except Exception:
-                logger.warning(
-                    'temp cleanup failed: %s',
-                    temp_path
-                )
+                logger.warning('temp cleanup failed: %s', temp_path)
 
     def parse_text(self, text):
         return parse_report_text(text)
