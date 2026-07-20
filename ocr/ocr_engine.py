@@ -34,9 +34,7 @@ class OCREngine:
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
 
-        self.orientation = OrientationDetector(
-            self.ocr_exe
-        )
+        self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
 
         self.status = OCRStatus.CHECKING
@@ -65,58 +63,80 @@ class OCREngine:
         items = []
         texts = []
 
-        try:
-            with open(tsv_file, 'r', encoding='utf-8') as file:
-                reader = csv.DictReader(file, delimiter='\t')
-                for row in reader:
-                    text = row.get('text', '').strip()
-                    conf = row.get('conf', '-1')
+        with open(tsv_file, 'r', encoding='utf-8') as file:
+            reader = csv.DictReader(file, delimiter='\t')
+            for row in reader:
+                text = row.get('text', '').strip()
+                conf = row.get('conf', '-1')
 
-                    if text and conf != '-1':
-                        items.append({
-                            'text': text,
-                            'x': int(row.get('left', 0)),
-                            'y': int(row.get('top', 0)),
-                            'w': int(row.get('width', 0)),
-                            'h': int(row.get('height', 0)),
-                            'block': row.get('block_num', ''),
-                            'paragraph': row.get('par_num', ''),
-                            'line': row.get('line_num', '')
-                        })
-                        texts.append(text)
-
-        except Exception as exc:
-            self.error_code = ErrorCode.OCR_PARSE_FAILED
-            self.last_error = str(exc)
-            logger.exception('[%s] TSV解析失败', self.error_code)
+                if text and conf != '-1':
+                    items.append({
+                        'text': text,
+                        'x': int(row.get('left', 0)),
+                        'y': int(row.get('top', 0)),
+                        'w': int(row.get('width', 0)),
+                        'h': int(row.get('height', 0)),
+                        'block': row.get('block_num', ''),
+                        'paragraph': row.get('par_num', ''),
+                        'line': row.get('line_num', '')
+                    })
+                    texts.append(text)
 
         return {
             'items': items,
             'raw_text': '\n'.join(texts)
         }
 
-    def _prepare_image(self, image_path, output_path):
-        """OCR before-processing pipeline."""
+    def _rotate_if_needed(self, image_path, output_path, angle):
+        if angle == 0:
+            return str(image_path)
 
+        try:
+            import cv2
+
+            image = cv2.imread(str(image_path))
+            if image is None:
+                return str(image_path)
+
+            rotated = self.orientation.rotate_image(
+                image,
+                angle
+            )
+
+            cv2.imwrite(
+                str(output_path),
+                rotated
+            )
+
+            logger.info(
+                'image rotated: %s degree',
+                angle
+            )
+
+            return str(output_path)
+
+        except Exception:
+            logger.exception('rotation failed')
+            return str(image_path)
+
+    def _prepare_image(self, image_path, output_path):
         current = str(image_path)
 
         angle = self.orientation.detect(current)
 
         logger.info(
-            'OCR orientation detected: %s',
+            'orientation result: %s',
             angle
         )
 
-        # Rotation handling is kept isolated for future
-        # OpenCV pipeline integration.
-        if angle:
-            logger.info(
-                'Image rotation required: %s',
-                angle
-            )
+        rotated_path = self._rotate_if_needed(
+            current,
+            output_path,
+            angle
+        )
 
         return self.document_detector.detect_and_crop(
-            current,
+            rotated_path,
             output_path
         )
 
@@ -126,10 +146,7 @@ class OCREngine:
         temp_path = None
 
         try:
-            with tempfile.NamedTemporaryFile(
-                suffix='.jpg',
-                delete=False
-            ) as temp:
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp_path = Path(temp.name)
 
             logger.info('OCR start: %s', image_path)
