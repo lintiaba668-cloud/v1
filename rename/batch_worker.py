@@ -15,6 +15,8 @@ This module does not depend on UI thread.
 from pathlib import Path
 import shutil
 
+from core.error_code import ErrorCode
+
 
 class BatchWorker:
 
@@ -51,7 +53,29 @@ class BatchWorker:
 
         input_path = Path(input_dir)
         output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+
+        if not input_path.exists():
+            stats["failed"] = 1
+            stats["errors"].append({
+                "file": str(input_path),
+                "code": ErrorCode.INPUT_PATH_MISSING,
+                "message": "input path missing"
+            })
+            return stats
+
+        try:
+            output_path.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+        except Exception as exc:
+            stats["failed"] = 1
+            stats["errors"].append({
+                "file": str(output_path),
+                "code": ErrorCode.OUTPUT_FAILED,
+                "message": str(exc)
+            })
+            return stats
 
         images = self._scan_images(input_path)
         stats["total"] = len(images)
@@ -80,10 +104,19 @@ class BatchWorker:
                 shutil.copy2(image, target)
                 stats["success"] += 1
 
+            except ValueError as exc:
+                stats["failed"] += 1
+                stats["errors"].append({
+                    "file": str(image),
+                    "code": ErrorCode.INVALID_FILENAME,
+                    "message": str(exc)
+                })
+
             except Exception as exc:
                 stats["failed"] += 1
                 stats["errors"].append({
                     "file": str(image),
+                    "code": ErrorCode.COPY_FAILED,
                     "message": str(exc)
                 })
 
