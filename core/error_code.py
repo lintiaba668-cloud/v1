@@ -25,6 +25,10 @@ class ErrorCode:
     OUTPUT_FAILED = "E301"
     FILE_EXISTS = "E302"
 
+    INVALID_FILENAME = "E303"
+    INPUT_PATH_MISSING = "E304"
+    COPY_FAILED = "E305"
+
 
 ERROR_MESSAGE = {
     ErrorCode.SUCCESS: "success",
@@ -37,7 +41,10 @@ ERROR_MESSAGE = {
     ErrorCode.IMAGE_INVALID: "invalid image",
     ErrorCode.IMAGE_PREPROCESS_FAILED: "image preprocess failed",
     ErrorCode.OUTPUT_FAILED: "output failed",
-    ErrorCode.FILE_EXISTS: "file already exists"
+    ErrorCode.FILE_EXISTS: "file already exists",
+    ErrorCode.INVALID_FILENAME: "invalid filename",
+    ErrorCode.INPUT_PATH_MISSING: "input path missing",
+    ErrorCode.COPY_FAILED: "file copy failed"
 }
 
 
