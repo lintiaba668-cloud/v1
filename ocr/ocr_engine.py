@@ -59,27 +59,15 @@ class OCREngine:
             self.status = 'FAILED'
             self.error_code = ErrorCode.ENGINE_MISSING
             self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
-            logger.error(
-                '[%s] %s',
-                self.error_code,
-                self.last_error
-            )
+            logger.error('[%s] %s', self.error_code, self.last_error)
 
     def _parse_tsv(self, tsv_file):
         items = []
         texts = []
 
         try:
-            with open(
-                tsv_file,
-                'r',
-                encoding='utf-8'
-            ) as file:
-
-                reader = csv.DictReader(
-                    file,
-                    delimiter='\t'
-                )
+            with open(tsv_file, 'r', encoding='utf-8') as file:
+                reader = csv.DictReader(file, delimiter='\t')
 
                 for row in reader:
                     text = row.get('text', '').strip()
@@ -98,10 +86,7 @@ class OCREngine:
         except Exception as exc:
             self.error_code = ErrorCode.OCR_PARSE_FAILED
             self.last_error = str(exc)
-            logger.exception(
-                '[%s] TSV解析失败',
-                self.error_code
-            )
+            logger.exception('[%s] TSV解析失败', self.error_code)
 
         return {
             'items': items,
@@ -118,9 +103,7 @@ class OCREngine:
 
         self.status = 'RUNNING'
 
-        result = self.executor.execute(
-            image_path
-        )
+        result = self.executor.execute(image_path)
 
         if not result['success']:
             self.status = 'FAILED'
@@ -132,11 +115,7 @@ class OCREngine:
                 'raw_text': ''
             }
 
-        self.status = 'FINISHED'
-
-        return self._parse_tsv(
-            result['tsv_file']
-        )
+        return self._parse_tsv(result['tsv_file'])
 
     def recognize(self, image_path):
 
@@ -146,18 +125,29 @@ class OCREngine:
         )
 
         try:
+            logger.info(
+                'preprocess start: %s',
+                image_path
+            )
+
             preprocess(
                 str(image_path),
                 str(temp_path)
             )
 
-            ocr_result = self._run_ocr(
-                str(temp_path)
+            logger.info(
+                'preprocess finished: %s',
+                temp_path
             )
+
+            ocr_result = self._run_ocr(str(temp_path))
 
             result = parse_report_text(
                 ocr_result['raw_text']
             )
+
+            if self.status != 'FAILED':
+                self.status = 'FINISHED'
 
             return {
                 'image': str(image_path),
@@ -172,10 +162,12 @@ class OCREngine:
 
         except Exception as exc:
             self.status = 'FAILED'
+            self.error_code = ErrorCode.IMAGE_PREPROCESS_FAILED
             self.last_error = str(exc)
 
             logger.exception(
-                '识别失败'
+                '[%s] 图片处理失败',
+                self.error_code
             )
 
             return {
@@ -188,6 +180,20 @@ class OCREngine:
                 'error_code': self.error_code,
                 'error_message': self.last_error
             }
+
+        finally:
+            try:
+                if temp_path.exists():
+                    temp_path.unlink()
+                    logger.debug(
+                        'removed temp file: %s',
+                        temp_path
+                    )
+            except Exception:
+                logger.warning(
+                    'temp cleanup failed: %s',
+                    temp_path
+                )
 
     def parse_text(self, text):
         return parse_report_text(text)
