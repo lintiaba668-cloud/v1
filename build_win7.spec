@@ -1,9 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+"""PowerRename Win7 PyInstaller build configuration."""
+
 from pathlib import Path
 
 block_cipher = None
-
 base = Path('.')
 
 
@@ -25,11 +26,16 @@ hiddenimports = [
     'openpyxl',
     'PIL',
     'ocr.ocr_engine',
-    'ocr.pipeline_ocr',
-    'ocr.field_region_v28',
+    'ocr.ocr_executor',
     'ocr.text_parser',
+    'rename.filename_rule',
+    'rename.validator',
+    'rename.batch_worker',
+    'ui.main_window_v3',
+    'ui.qt_worker',
     'core.startup_check',
-    'core.final_runner'
+    'core.final_runner',
+    'core.resource'
 ]
 
 
@@ -50,7 +56,11 @@ a = Analysis(
     cipher=block_cipher,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(
+    a.pure,
+    a.zipped_data,
+    cipher=block_cipher
+)
 
 exe = EXE(
     pyz,
