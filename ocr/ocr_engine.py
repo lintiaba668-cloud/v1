@@ -26,7 +26,6 @@ class OCREngine:
         self.last_error = ''
         self.error_code = ErrorCode.SUCCESS
         self.status = OCRStatus.INIT
-
         self.executor = OCRExecutor()
 
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
@@ -60,15 +59,28 @@ class OCREngine:
         try:
             with open(tsv_file, 'r', encoding='utf-8') as file:
                 reader = csv.DictReader(file, delimiter='\t')
+
                 for row in reader:
                     text = row.get('text', '').strip()
                     conf = row.get('conf', '-1')
+
                     if text and conf != '-1':
-                        items.append({'text': text})
+                        items.append({
+                            'text': text,
+                            'x': int(row.get('left', 0)),
+                            'y': int(row.get('top', 0)),
+                            'w': int(row.get('width', 0)),
+                            'h': int(row.get('height', 0)),
+                            'block': row.get('block_num', ''),
+                            'paragraph': row.get('par_num', ''),
+                            'line': row.get('line_num', '')
+                        })
                         texts.append(text)
+
         except Exception as exc:
             self.error_code = ErrorCode.OCR_PARSE_FAILED
             self.last_error = str(exc)
+            logger.exception('[%s] TSV解析失败', self.error_code)
 
         return {
             'items': items,
