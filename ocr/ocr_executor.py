@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
 
-"""
-Tesseract OCR执行层
+"""Tesseract OCR执行层.
 
-职责：
-1. 管理内置tesseract调用；
-2. 处理timeout、returncode、stderr；
-3. 管理OCR临时文件。
+负责：
+- tesseract调用
+- 超时处理
+- 错误处理
+- 临时文件生命周期
 
 不负责：
-- TSV解析；
-- 工程名称提取；
-- 文件命名规则。
+- TSV解析
+- 工程字段提取
 """
 
 import logging
@@ -23,7 +22,6 @@ from pathlib import Path
 from core.error_code import ErrorCode
 from core.resource import get_resource_path
 
-
 logger = logging.getLogger("PowerRename.OCRExecutor")
 
 
@@ -31,29 +29,18 @@ class OCRExecutor:
 
     def __init__(self, timeout=60):
         self.timeout = timeout
-        self.ocr_exe = get_resource_path(
-            "engine/tesseract.exe"
-        )
-        self.tessdata = get_resource_path(
-            "engine/tessdata"
-        )
+        self.ocr_exe = get_resource_path("engine/tesseract.exe")
+        self.tessdata = get_resource_path("engine/tessdata")
 
     def execute(self, image_path):
-
         if not self.ocr_exe.exists():
-            return self._failed(
-                ErrorCode.ENGINE_MISSING,
-                "OCR engine missing"
-            )
+            return self._failed(ErrorCode.ENGINE_MISSING, "OCR engine missing")
 
         temp_file = None
 
         try:
-            with tempfile.NamedTemporaryFile(
-                delete=False,
-                suffix=".txt"
-            ) as f:
-                temp_file = f.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".txt") as file:
+                temp_file = file.name
 
             env = os.environ.copy()
             env["TESSDATA_PREFIX"] = str(self.tessdata)
@@ -67,11 +54,6 @@ class OCRExecutor:
                 "tsv"
             ]
 
-            logger.info(
-                "execute OCR: %s",
-                image_path
-            )
-
             result = subprocess.run(
                 command,
                 env=env,
@@ -81,65 +63,43 @@ class OCRExecutor:
             )
 
             if result.returncode != 0:
-                stderr = result.stderr.decode(
-                    "utf-8",
-                    errors="ignore"
-                )
-
                 return self._failed(
                     ErrorCode.OCR_EXEC_FAILED,
-                    stderr
+                    result.stderr.decode("utf-8", errors="ignore")
                 )
 
             return {
                 "success": True,
                 "tsv_file": Path(temp_file + ".tsv"),
+                "temp_file": Path(temp_file),
                 "error_code": ErrorCode.SUCCESS,
                 "error_message": ""
             }
 
         except subprocess.TimeoutExpired:
-            return self._failed(
-                ErrorCode.OCR_TIMEOUT,
-                "OCR execution timeout"
-            )
+            return self._failed(ErrorCode.OCR_TIMEOUT, "OCR execution timeout")
 
         except Exception as exc:
-            logger.exception(
-                "OCR executor exception"
-            )
-            return self._failed(
-                ErrorCode.OCR_EXEC_FAILED,
-                str(exc)
-            )
+            logger.exception("OCR executor exception")
+            return self._failed(ErrorCode.OCR_EXEC_FAILED, str(exc))
 
         finally:
-            self._remove_temp(temp_file)
-
-    def _remove_temp(self, temp_file):
-        if not temp_file:
-            return
-
-        for path in [
-            Path(temp_file),
-            Path(temp_file + ".tsv")
-        ]:
-            try:
+            if temp_file:
+                path = Path(temp_file)
                 if path.exists():
                     path.unlink()
-            except Exception:
-                logger.warning(
-                    "remove temp failed: %s",
-                    path
-                )
+
+    def cleanup(self, result):
+        """由调用方完成TSV解析后调用。"""
+        if not result:
+            return
+
+        tsv_file = result.get("tsv_file")
+        if tsv_file and Path(tsv_file).exists():
+            Path(tsv_file).unlink()
 
     def _failed(self, code, message):
-        logger.error(
-            "[%s] %s",
-            code,
-            message
-        )
-
+        logger.error("[%s] %s", code, message)
         return {
             "success": False,
             "tsv_file": None,
