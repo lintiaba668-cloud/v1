@@ -90,19 +90,30 @@ class OCRExecutor:
                     path.unlink()
 
     def cleanup(self, result):
-        """由调用方完成TSV解析后调用。"""
+        """由调用方完成TSV解析后调用，清理OCR临时输出。"""
         if not result:
             return
 
-        tsv_file = result.get("tsv_file")
-        if tsv_file and Path(tsv_file).exists():
-            Path(tsv_file).unlink()
+        for key in ("tsv_file", "temp_file"):
+            file_path = result.get(key)
+
+            if file_path:
+                path = Path(file_path)
+                try:
+                    if path.exists():
+                        path.unlink()
+                except Exception:
+                    logger.warning(
+                        "cleanup failed: %s",
+                        path
+                    )
 
     def _failed(self, code, message):
         logger.error("[%s] %s", code, message)
         return {
             "success": False,
             "tsv_file": None,
+            "temp_file": None,
             "error_code": code,
             "error_message": message
         }
