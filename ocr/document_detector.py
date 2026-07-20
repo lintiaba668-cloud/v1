@@ -2,19 +2,20 @@
 
 """Document image detector.
 
-Detects the paper area before OCR processing.
-Designed for photographed engineering reports.
-
-The first version keeps OpenCV optional to maintain Win7 compatibility.
+Detects photographed engineering report pages and applies
+perspective correction before OCR.
 """
 
 from pathlib import Path
+
+from .perspective_corrector import PerspectiveCorrector
 
 
 class DocumentDetector:
 
     def __init__(self):
         self.available = False
+        self.corrector = PerspectiveCorrector()
 
         try:
             import cv2
@@ -24,12 +25,6 @@ class DocumentDetector:
             self.cv2 = None
 
     def detect_and_crop(self, image_path, output_path):
-        """Detect document area and save cropped image.
-
-        If OpenCV is unavailable or detection fails,
-        returns original image copy path.
-        """
-
         image_path = Path(image_path)
         output_path = Path(output_path)
 
@@ -46,19 +41,18 @@ class DocumentDetector:
                 'image load failed: ' + str(image_path)
             )
 
-        cropped = self._find_document(image)
+        corrected = self._find_document(image)
 
-        if cropped is None:
+        if corrected is None:
             self.cv2.imwrite(
                 str(output_path),
                 image
             )
-            return str(output_path)
-
-        self.cv2.imwrite(
-            str(output_path),
-            cropped
-        )
+        else:
+            self.cv2.imwrite(
+                str(output_path),
+                corrected
+            )
 
         return str(output_path)
 
@@ -95,9 +89,7 @@ class DocumentDetector:
         )
 
         for contour in contours[:10]:
-            area = cv2.contourArea(contour)
-
-            if area < image.shape[0] * image.shape[1] * 0.2:
+            if cv2.contourArea(contour) < image.shape[0] * image.shape[1] * 0.2:
                 continue
 
             perimeter = cv2.arcLength(
@@ -112,28 +104,12 @@ class DocumentDetector:
             )
 
             if len(approx) == 4:
-                return self._perspective_transform(
+                return self.corrector.correct(
                     image,
                     approx
                 )
 
         return None
-
-    def _perspective_transform(self, image, points):
-        """Placeholder for four-point transform.
-
-        Kept isolated for later refinement.
-        """
-
-        cv2 = self.cv2
-        rect = points.reshape(4, 2)
-
-        x, y, w, h = cv2.boundingRect(points)
-
-        return image[
-            y:y+h,
-            x:x+w
-        ]
 
     def _copy_original(self, source, target):
         import shutil
