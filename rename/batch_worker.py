@@ -39,7 +39,8 @@ class BatchWorker:
         self,
         input_dir,
         output_dir,
-        report_type
+        report_type,
+        progress_callback=None
     ):
         stats = {
             "total": 0,
@@ -50,14 +51,12 @@ class BatchWorker:
 
         input_path = Path(input_dir)
         output_path = Path(output_dir)
-        output_path.mkdir(
-            parents=True,
-            exist_ok=True
-        )
+        output_path.mkdir(parents=True, exist_ok=True)
 
-        for image in self._scan_images(input_path):
-            stats["total"] += 1
+        images = self._scan_images(input_path)
+        stats["total"] = len(images)
 
+        for index, image in enumerate(images, start=1):
             try:
                 result = self.ocr_engine.recognize(image)
 
@@ -72,13 +71,13 @@ class BatchWorker:
                 if not valid:
                     raise ValueError(message)
 
-                target = output_path / (filename + image.suffix)
-
-                shutil.copy2(
-                    image,
-                    target
+                target = self._unique_target(
+                    output_path,
+                    filename,
+                    image.suffix
                 )
 
+                shutil.copy2(image, target)
                 stats["success"] += 1
 
             except Exception as exc:
@@ -88,7 +87,37 @@ class BatchWorker:
                     "message": str(exc)
                 })
 
+            finally:
+                if progress_callback:
+                    progress_callback(
+                        index,
+                        stats["total"],
+                        str(image)
+                    )
+
         return stats
+
+    def _unique_target(self, directory, filename, suffix):
+        target = directory / (filename + suffix)
+
+        if not target.exists():
+            return target
+
+        index = 1
+
+        while True:
+            target = directory / (
+                "%s(%d)%s" % (
+                    filename,
+                    index,
+                    suffix
+                )
+            )
+
+            if not target.exists():
+                return target
+
+            index += 1
 
     def _scan_images(self, directory):
         if not directory.exists():
