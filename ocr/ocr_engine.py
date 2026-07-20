@@ -78,21 +78,22 @@ class OCREngine:
     def recognize(self, image_path):
         image_path = Path(image_path)
         temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
+        executor_result = None
 
         try:
             preprocess(str(image_path), str(temp_path))
 
-            ocr_result = self.executor.execute(str(temp_path))
+            executor_result = self.executor.execute(str(temp_path))
 
-            if not ocr_result['success']:
+            if not executor_result['success']:
                 return OCRResult(
                     image=str(image_path),
                     status=OCRStatus.FAILED,
-                    error_code=ocr_result['error_code'],
-                    error_message=ocr_result['error_message']
+                    error_code=executor_result['error_code'],
+                    error_message=executor_result['error_message']
                 ).to_dict()
 
-            parsed = self._parse_tsv(ocr_result['tsv_file'])
+            parsed = self._parse_tsv(executor_result['tsv_file'])
             report = parse_report_text(parsed['raw_text'])
 
             return OCRResult(
@@ -114,6 +115,9 @@ class OCREngine:
             ).to_dict()
 
         finally:
+            if executor_result:
+                self.executor.cleanup(executor_result)
+
             if temp_path.exists():
                 temp_path.unlink()
 
