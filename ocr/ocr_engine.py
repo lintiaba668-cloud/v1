@@ -6,6 +6,8 @@ Win7兼容版：程序目录内OCR + TSV坐标解析
 from pathlib import Path
 import csv
 import logging
+import tempfile
+import shutil
 
 from .text_parser import parse_report_text
 from .image_preprocess import preprocess
@@ -51,6 +53,7 @@ class OCREngine:
             self.status = OCRStatus.FAILED
             self.error_code = ErrorCode.ENGINE_MISSING
             self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
+            logger.error(self.last_error)
 
     def _parse_tsv(self, tsv_file):
         items = []
@@ -59,7 +62,6 @@ class OCREngine:
         try:
             with open(tsv_file, 'r', encoding='utf-8') as file:
                 reader = csv.DictReader(file, delimiter='\t')
-
                 for row in reader:
                     text = row.get('text', '').strip()
                     conf = row.get('conf', '-1')
@@ -89,10 +91,18 @@ class OCREngine:
 
     def recognize(self, image_path):
         image_path = Path(image_path)
-        temp_path = image_path.with_name(image_path.stem + '_ocr.jpg')
         executor_result = None
+        temp_path = None
 
         try:
+            with tempfile.NamedTemporaryFile(
+                suffix='.jpg',
+                delete=False
+            ) as temp:
+                temp_path = Path(temp.name)
+
+            logger.info('OCR start: %s', image_path)
+
             preprocess(str(image_path), str(temp_path))
 
             executor_result = self.executor.execute(str(temp_path))
@@ -119,6 +129,7 @@ class OCREngine:
             ).to_dict()
 
         except Exception as exc:
+            logger.exception('OCR failed: %s', image_path)
             return OCRResult(
                 image=str(image_path),
                 status=OCRStatus.FAILED,
@@ -130,7 +141,7 @@ class OCREngine:
             if executor_result:
                 self.executor.cleanup(executor_result)
 
-            if temp_path.exists():
+            if temp_path and temp_path.exists():
                 temp_path.unlink()
 
     def parse_text(self, text):
