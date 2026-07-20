@@ -7,11 +7,12 @@ from pathlib import Path
 import csv
 import logging
 import tempfile
-import shutil
 
 from .text_parser import parse_report_text
 from .image_preprocess import preprocess
 from .ocr_executor import OCRExecutor
+from .orientation_detector import OrientationDetector
+from .document_detector import DocumentDetector
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
 from core.status import OCRStatus
@@ -32,6 +33,11 @@ class OCREngine:
 
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
+
+        self.orientation = OrientationDetector(
+            self.ocr_exe
+        )
+        self.document_detector = DocumentDetector()
 
         self.status = OCRStatus.CHECKING
         self._validate_engine()
@@ -89,6 +95,31 @@ class OCREngine:
             'raw_text': '\n'.join(texts)
         }
 
+    def _prepare_image(self, image_path, output_path):
+        """OCR before-processing pipeline."""
+
+        current = str(image_path)
+
+        angle = self.orientation.detect(current)
+
+        logger.info(
+            'OCR orientation detected: %s',
+            angle
+        )
+
+        # Rotation handling is kept isolated for future
+        # OpenCV pipeline integration.
+        if angle:
+            logger.info(
+                'Image rotation required: %s',
+                angle
+            )
+
+        return self.document_detector.detect_and_crop(
+            current,
+            output_path
+        )
+
     def recognize(self, image_path):
         image_path = Path(image_path)
         executor_result = None
@@ -103,9 +134,19 @@ class OCREngine:
 
             logger.info('OCR start: %s', image_path)
 
-            preprocess(str(image_path), str(temp_path))
+            prepared = self._prepare_image(
+                image_path,
+                temp_path
+            )
 
-            executor_result = self.executor.execute(str(temp_path))
+            preprocess(
+                prepared,
+                str(temp_path)
+            )
+
+            executor_result = self.executor.execute(
+                str(temp_path)
+            )
 
             if not executor_result['success']:
                 return OCRResult(
