@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 
-"""Engineering report field extraction based on OCR coordinates.
+"""Engineering report field extraction based on OCR coordinates."""
 
-Optimized for long power engineering project names that wrap across rows.
-"""
-
+import logging
 import re
+
+logger = logging.getLogger("PowerRename.FieldExtractor")
 
 
 IGNORE_FIELDS = [
@@ -25,10 +25,18 @@ class FieldExtractor:
     )
 
     def extract(self, items):
-        return {
+        result = {
             'project_name': self.extract_project_name(items),
             'project_code': self.extract_project_code(items)
         }
+
+        logger.info(
+            '[FIELD_EXTRACT] name=%s code=%s',
+            result['project_name'],
+            result['project_code']
+        )
+
+        return result
 
     def extract_project_code(self, items):
         candidates = []
@@ -36,7 +44,7 @@ class FieldExtractor:
         for item in items:
             text = item.get('text', '')
 
-            if '工程编号' in text or '编号' in text:
+            if '工程编号' in text or text == '编号':
                 nearby = self._nearby_text(items, item)
                 candidates.extend(
                     self.CODE_PATTERN.findall(nearby)
@@ -56,9 +64,8 @@ class FieldExtractor:
         if not candidates:
             return ''
 
-        # 优先选择包含数字和符号的工程编号格式
         ranked = sorted(
-            candidates,
+            set(candidates),
             key=lambda x: (
                 '-' in x,
                 any(c.isalpha() for c in x),
@@ -70,12 +77,14 @@ class FieldExtractor:
         return ranked[0]
 
     def extract_project_name(self, items):
-        label = self._find_label(
-            items,
-            '工程名称'
-        )
+        label = self._find_label(items, '工程名称')
 
         if not label:
+            # 兼容OCR拆字情况：工程 / 名 / 称
+            label = self._find_split_label(items)
+
+        if not label:
+            logger.warning('[FIELD_EXTRACT] project name label missing')
             return ''
 
         candidates = []
@@ -86,29 +95,21 @@ class FieldExtractor:
 
             text = item.get('text', '').strip()
 
-            if not text:
+            if not text or text in IGNORE_FIELDS:
                 continue
 
-            if text in IGNORE_FIELDS:
-                continue
-
-            # 同行右侧
             same_row = abs(
                 item.get('y', 0) - label.get('y', 0)
-            ) < 100
+            ) < 120
 
-            # 下一行同一单元格区域
             next_row = (
                 item.get('y', 0) > label.get('y', 0)
-                and item.get('y', 0) - label.get('y', 0) < 300
+                and item.get('y', 0) - label.get('y', 0) < 400
                 and item.get('x', 0) >= label.get('x', 0)
             )
 
             if same_row or next_row:
                 candidates.append(item)
-
-        if not candidates:
-            return ''
 
         candidates.sort(
             key=lambda x: (
@@ -117,12 +118,10 @@ class FieldExtractor:
             )
         )
 
-        result = ''.join(
+        return ''.join(
             item.get('text', '')
             for item in candidates
         )
-
-        return result
 
     def _find_label(self, items, keyword):
         for item in items:
@@ -130,15 +129,30 @@ class FieldExtractor:
                 return item
         return None
 
+    def _find_split_label(self, items):
+        words = []
+
+        for item in items:
+            text = item.get('text', '')
+            if text in ['工', '程', '名', '称']:
+                words.append(item)
+
+        if len(words) < 2:
+            return None
+
+        words.sort(key=lambda x: x.get('y', 0))
+
+        merged = dict(words[0])
+        merged['text'] = '工程名称'
+        return merged
+
     def _nearby_text(self, items, target):
         result = []
 
         for item in items:
             if abs(
                 item.get('y', 0) - target.get('y', 0)
-            ) < 200:
-                result.append(
-                    item.get('text', '')
-                )
+            ) < 250:
+                result.append(item.get('text', ''))
 
         return ''.join(result)
