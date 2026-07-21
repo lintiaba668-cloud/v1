@@ -2,30 +2,25 @@
 
 """OCR field processing pipeline.
 
-Combines coordinate reconstruction and power engineering
-project name normalization.
+Combines coordinate reconstruction, project name normalization
+and coordinate based field extraction.
 """
 
 from pathlib import Path
 
 from .text_layout import TextLayout
 from .project_name_builder import ProjectNameBuilder
+from .field_extractor import FieldExtractor
 
 
 class FieldPipeline:
 
     def __init__(self, dictionary_path=None):
         self.layout = TextLayout()
-        self.name_builder = ProjectNameBuilder(
-            dictionary_path
-        )
+        self.name_builder = ProjectNameBuilder(dictionary_path)
+        self.extractor = FieldExtractor()
 
     def process(self, items):
-        """Process OCR TSV items.
-
-        Returns reconstructed text and candidate lines.
-        """
-
         lines = self.layout.rebuild_lines(items)
 
         texts = [
@@ -35,8 +30,16 @@ class FieldPipeline:
 
         rebuilt = '\n'.join(texts)
 
+        fields = self.extractor.extract(items)
+
+        if fields.get('project_name'):
+            fields['project_name'] = self.name_builder.build(
+                fields['project_name']
+            )
+
         return {
             'layout_text': rebuilt,
+            'fields': fields,
             'project_name_candidates': [
                 self.name_builder.build(text)
                 for text in texts
