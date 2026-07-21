@@ -15,6 +15,7 @@ from .ocr_executor import OCRExecutor
 from .orientation_detector import OrientationDetector
 from .document_detector import DocumentDetector
 from .field_pipeline import FieldPipeline
+from .adaptive_region import AdaptiveOCRRegion
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
 from core.status import OCRStatus
@@ -35,6 +36,7 @@ class OCREngine:
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
         self.ocr_region = self._load_ocr_region()
+        self.adaptive_region = AdaptiveOCRRegion()
 
         self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
@@ -95,6 +97,22 @@ class OCREngine:
 
         return {'items': items, 'raw_text': '\n'.join(texts)}
 
+    def _recognize_with_region(self, image_path, temp_path, region):
+        preprocess(str(image_path), str(temp_path), {
+            'enabled': True,
+            'top_percent': region
+        })
+
+        executor_result = self.executor.execute(str(temp_path))
+
+        if not executor_result['success']:
+            return None, executor_result
+
+        parsed = self._parse_tsv(executor_result['tsv_file'])
+        pipeline_result = self.field_pipeline.process(parsed['items'])
+
+        return pipeline_result, executor_result
+
     def recognize(self, image_path):
         image_path = Path(image_path)
         executor_result = None
@@ -104,30 +122,39 @@ class OCREngine:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp_path = Path(temp.name)
 
-            preprocess(str(image_path), str(temp_path), self.ocr_region)
+            final_pipeline = None
 
-            executor_result = self.executor.execute(str(temp_path))
+            for region in self.adaptive_region.candidates():
+                pipeline_result, executor_result = self._recognize_with_region(
+                    image_path,
+                    temp_path,
+                    region
+                )
 
-            if not executor_result['success']:
+                if pipeline_result:
+                    fields = pipeline_result.get('fields', {})
+                    if not self.adaptive_region.need_expand(fields):
+                        final_pipeline = pipeline_result
+                        break
+
+                if executor_result:
+                    self.executor.cleanup(executor_result)
+                    executor_result = None
+
+            if not final_pipeline:
                 return OCRResult(
                     image=str(image_path),
                     status=OCRStatus.FAILED,
-                    error_code=executor_result['error_code'],
-                    error_message=executor_result['error_message']
+                    error_code=ErrorCode.IMAGE_PREPROCESS_FAILED,
+                    error_message='未找到有效OCR字段'
                 ).to_dict()
 
-            parsed = self._parse_tsv(executor_result['tsv_file'])
-            pipeline_result = self.field_pipeline.process(parsed['items'])
-            fields = pipeline_result.get('fields', {})
-
-            fallback = parse_report_text(
-                pipeline_result['layout_text']
-            )
+            fields = final_pipeline.get('fields', {})
+            fallback = parse_report_text(final_pipeline['layout_text'])
 
             return OCRResult(
                 image=str(image_path),
-                raw_text=pipeline_result['layout_text'],
-                items=parsed['items'],
+                raw_text=final_pipeline['layout_text'],
                 project_name=fields.get('project_name') or fallback.get('project_name', ''),
                 project_code=fields.get('project_code') or fallback.get('project_code', ''),
                 status=OCRStatus.FINISHED,
