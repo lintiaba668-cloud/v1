@@ -1,0 +1,6 @@
+{
+  "ocr_region": {
+    "enabled": true,
+    "top_percent": 25
+  }
+}
