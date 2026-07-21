@@ -1,17 +1,21 @@
 """
-OCR图片预处理模块 V2.2
-增加明确调试日志，确认预处理链路是否真正执行。
+OCR图片预处理模块 V2.3
+增加中间图片保存，便于定位裁剪和增强导致的识别下降。
 """
 
 import logging
+from pathlib import Path
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageChops
 
 logger = logging.getLogger("PowerRename.OCR")
 
 DEFAULT_REGION = {
-    'enabled': True,
+    'enabled': False,
     'top_percent': 25
 }
+
+
+DEBUG_DIR = Path('logs/preprocess')
 
 
 def preprocess(image_path, output_path, ocr_region=None):
@@ -25,7 +29,9 @@ def preprocess(image_path, output_path, ocr_region=None):
         img.height
     )
 
-    # EXIF方向纠正必须在裁剪前
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    img.save(DEBUG_DIR / '01_original.jpg')
+
     before_size = img.size
     img = ImageOps.exif_transpose(img)
 
@@ -33,6 +39,8 @@ def preprocess(image_path, output_path, ocr_region=None):
         logger.info('[ROTATE] EXIF orientation corrected')
     else:
         logger.info('[ROTATE] no EXIF rotation')
+
+    img.save(DEBUG_DIR / '02_rotate.jpg')
 
     region = ocr_region or DEFAULT_REGION
 
@@ -48,12 +56,17 @@ def preprocess(image_path, output_path, ocr_region=None):
     else:
         logger.info('[CROP] disabled')
 
+    img.save(DEBUG_DIR / '03_crop.jpg')
+
     img = trim_border(img)
+    img.save(DEBUG_DIR / '04_trim.jpg')
 
     img = img.convert('L')
-    img = ImageEnhance.Contrast(img).enhance(2.0)
+    img = ImageEnhance.Contrast(img).enhance(1.5)
     img = img.filter(ImageFilter.SHARPEN)
     img = img.resize((img.width * 2, img.height * 2))
+
+    img.save(DEBUG_DIR / '05_enhance.jpg')
 
     logger.info(
         '[PREPROCESS] output width=%s height=%s',
@@ -69,10 +82,7 @@ def preprocess(image_path, output_path, ocr_region=None):
 def crop_header_area(img, top_percent=25):
     width, height = img.size
 
-    percent = max(
-        5,
-        min(top_percent, 100)
-    )
+    percent = max(5, min(top_percent, 100))
 
     return img.crop(
         (0, 0, width, int(height * percent / 100))
@@ -104,5 +114,4 @@ def crop_header(image_path, output_path):
     img = Image.open(image_path)
     img = crop_header_area(img, 28)
     img.save(output_path)
-
     return output_path
