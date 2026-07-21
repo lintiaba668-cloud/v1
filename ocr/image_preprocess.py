@@ -1,11 +1,12 @@
 """
-OCR图片预处理模块 V2.1
-用于电力开竣工报告识别。
-增加OCR有效区域控制，减少无关字段干扰。
+OCR图片预处理模块 V2.2
+增加明确调试日志，确认预处理链路是否真正执行。
 """
 
+import logging
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageChops
 
+logger = logging.getLogger("PowerRename.OCR")
 
 DEFAULT_REGION = {
     'enabled': True,
@@ -14,31 +15,38 @@ DEFAULT_REGION = {
 
 
 def preprocess(image_path, output_path, ocr_region=None):
-    """
-    OCR图片预处理。
-
-    流程：
-    方向修正
-    -> OCR区域裁剪
-    -> 边缘处理
-    -> 灰度
-    -> 对比增强
-    -> 锐化
-    -> 放大
-    """
+    logger.info('[PREPROCESS] start')
 
     img = Image.open(image_path)
 
-    # 手机照片方向修正必须在裁剪前执行
+    logger.info(
+        '[IMAGE] width=%s height=%s',
+        img.width,
+        img.height
+    )
+
+    # EXIF方向纠正必须在裁剪前
+    before_size = img.size
     img = ImageOps.exif_transpose(img)
+
+    if img.size != before_size:
+        logger.info('[ROTATE] EXIF orientation corrected')
+    else:
+        logger.info('[ROTATE] no EXIF rotation')
 
     region = ocr_region or DEFAULT_REGION
 
     if region.get('enabled', False):
-        img = crop_header_area(
-            img,
-            region.get('top_percent', 25)
+        percent = region.get('top_percent', 25)
+        img = crop_header_area(img, percent)
+
+        logger.info(
+            '[CROP] top_percent=%s crop_height=%s',
+            percent,
+            img.height
         )
+    else:
+        logger.info('[CROP] disabled')
 
     img = trim_border(img)
 
@@ -47,14 +55,18 @@ def preprocess(image_path, output_path, ocr_region=None):
     img = img.filter(ImageFilter.SHARPEN)
     img = img.resize((img.width * 2, img.height * 2))
 
+    logger.info(
+        '[PREPROCESS] output width=%s height=%s',
+        img.width,
+        img.height
+    )
+
     img.save(output_path)
 
     return output_path
 
 
 def crop_header_area(img, top_percent=25):
-    """Crop top OCR region after rotation correction."""
-
     width, height = img.size
 
     percent = max(
@@ -68,8 +80,6 @@ def crop_header_area(img, top_percent=25):
 
 
 def trim_border(img):
-    """Remove surrounding background area."""
-
     if img.mode != 'RGB':
         temp = img.convert('RGB')
     else:
@@ -81,11 +91,7 @@ def trim_border(img):
         temp.getpixel((0, 0))
     )
 
-    diff = ImageChops.difference(
-        temp,
-        bg
-    )
-
+    diff = ImageChops.difference(temp, bg)
     box = diff.getbbox()
 
     if box:
@@ -95,8 +101,6 @@ def trim_border(img):
 
 
 def crop_header(image_path, output_path):
-    """Compatibility interface."""
-
     img = Image.open(image_path)
     img = crop_header_area(img, 28)
     img.save(output_path)
