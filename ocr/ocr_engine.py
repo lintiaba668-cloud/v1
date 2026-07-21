@@ -20,7 +20,6 @@ from core.error_code import ErrorCode
 from core.status import OCRStatus
 from core.ocr_result import OCRResult
 
-
 logger = logging.getLogger("PowerRename.OCR")
 
 
@@ -35,7 +34,6 @@ class OCREngine:
 
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
-
         self.ocr_region = self._load_ocr_region()
 
         self.orientation = OrientationDetector(self.ocr_exe)
@@ -49,42 +47,15 @@ class OCREngine:
             self.status = OCRStatus.READY
 
     def _load_ocr_region(self):
-        """Load OCR area configuration.
-
-        Keeps deployment flexible without changing code.
-        """
-
-        default = {
-            'enabled': True,
-            'top_percent': 25
-        }
-
+        default = {'enabled': True, 'top_percent': 25}
         config_path = get_resource_path('config.json')
 
         try:
             if config_path.exists():
-                config = json.loads(
-                    config_path.read_text(
-                        encoding='utf-8'
-                    )
-                )
-
-                region = config.get(
-                    'ocr_region',
-                    {}
-                )
-
-                default.update(region)
-
+                config = json.loads(config_path.read_text(encoding='utf-8'))
+                default.update(config.get('ocr_region', {}))
         except Exception:
-            logger.exception(
-                'load OCR region config failed'
-            )
-
-        logger.info(
-            'OCR region config: %s',
-            default
-        )
+            logger.exception('load OCR region config failed')
 
         return default
 
@@ -102,7 +73,6 @@ class OCREngine:
             self.status = OCRStatus.FAILED
             self.error_code = ErrorCode.ENGINE_MISSING
             self.last_error = 'OCR组件缺失: ' + ', '.join(missing)
-            logger.error(self.last_error)
 
     def _parse_tsv(self, tsv_file):
         items = []
@@ -113,58 +83,17 @@ class OCREngine:
             for row in reader:
                 text = row.get('text', '').strip()
                 conf = row.get('conf', '-1')
-
                 if text and conf != '-1':
                     items.append({
                         'text': text,
                         'x': int(row.get('left', 0)),
                         'y': int(row.get('top', 0)),
                         'w': int(row.get('width', 0)),
-                        'h': int(row.get('height', 0)),
-                        'block': row.get('block_num', ''),
-                        'paragraph': row.get('par_num', ''),
-                        'line': row.get('line_num', '')
+                        'h': int(row.get('height', 0))
                     })
                     texts.append(text)
 
-        return {
-            'items': items,
-            'raw_text': '\n'.join(texts)
-        }
-
-    def _rotate_if_needed(self, image_path, output_path, angle):
-        if angle == 0:
-            return str(image_path)
-
-        try:
-            import cv2
-            image = cv2.imread(str(image_path))
-
-            if image is None:
-                return str(image_path)
-
-            rotated = self.orientation.rotate_image(image, angle)
-            cv2.imwrite(str(output_path), rotated)
-            return str(output_path)
-
-        except Exception:
-            logger.exception('rotation failed')
-            return str(image_path)
-
-    def _prepare_image(self, image_path, output_path):
-        current = str(image_path)
-        angle = self.orientation.detect(current)
-
-        rotated_path = self._rotate_if_needed(
-            current,
-            output_path,
-            angle
-        )
-
-        return self.document_detector.detect_and_crop(
-            rotated_path,
-            output_path
-        )
+        return {'items': items, 'raw_text': '\n'.join(texts)}
 
     def recognize(self, image_path):
         image_path = Path(image_path)
@@ -175,12 +104,7 @@ class OCREngine:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp_path = Path(temp.name)
 
-            prepared = self._prepare_image(image_path, temp_path)
-            preprocess(
-                prepared,
-                str(temp_path),
-                self.ocr_region
-            )
+            preprocess(str(image_path), str(temp_path), self.ocr_region)
 
             executor_result = self.executor.execute(str(temp_path))
 
@@ -193,12 +117,10 @@ class OCREngine:
                 ).to_dict()
 
             parsed = self._parse_tsv(executor_result['tsv_file'])
+            pipeline_result = self.field_pipeline.process(parsed['items'])
+            fields = pipeline_result.get('fields', {})
 
-            pipeline_result = self.field_pipeline.process(
-                parsed['items']
-            )
-
-            report = parse_report_text(
+            fallback = parse_report_text(
                 pipeline_result['layout_text']
             )
 
@@ -206,8 +128,8 @@ class OCREngine:
                 image=str(image_path),
                 raw_text=pipeline_result['layout_text'],
                 items=parsed['items'],
-                project_name=report.get('project_name', ''),
-                project_code=report.get('project_code', ''),
+                project_name=fields.get('project_name') or fallback.get('project_name', ''),
+                project_code=fields.get('project_code') or fallback.get('project_code', ''),
                 status=OCRStatus.FINISHED,
                 error_code=ErrorCode.SUCCESS
             ).to_dict()
