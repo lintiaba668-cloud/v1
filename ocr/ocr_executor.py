@@ -7,10 +7,6 @@
 - 超时处理
 - 错误处理
 - 临时文件生命周期
-
-不负责：
-- TSV解析
-- 工程字段提取
 """
 
 import logging
@@ -54,6 +50,8 @@ class OCRExecutor:
                 "tsv"
             ]
 
+            logger.info('[OCR] execute image=%s', image_path)
+
             result = subprocess.run(
                 command,
                 env=env,
@@ -68,9 +66,17 @@ class OCRExecutor:
                     result.stderr.decode("utf-8", errors="ignore")
                 )
 
+            tsv_path = Path(temp_file + ".tsv")
+
+            logger.info(
+                '[OCR_DATA] tsv=%s exists=%s',
+                tsv_path,
+                tsv_path.exists()
+            )
+
             return {
                 "success": True,
-                "tsv_file": Path(temp_file + ".tsv"),
+                "tsv_file": tsv_path,
                 "temp_file": Path(temp_file),
                 "error_code": ErrorCode.SUCCESS,
                 "error_message": ""
@@ -78,7 +84,6 @@ class OCRExecutor:
 
         except subprocess.TimeoutExpired:
             return self._failed(ErrorCode.OCR_TIMEOUT, "OCR execution timeout")
-
         except Exception as exc:
             logger.exception("OCR executor exception")
             return self._failed(ErrorCode.OCR_EXEC_FAILED, str(exc))
@@ -90,23 +95,18 @@ class OCRExecutor:
                     path.unlink()
 
     def cleanup(self, result):
-        """由调用方完成TSV解析后调用，清理OCR临时输出。"""
         if not result:
             return
 
         for key in ("tsv_file", "temp_file"):
             file_path = result.get(key)
-
             if file_path:
                 path = Path(file_path)
                 try:
                     if path.exists():
                         path.unlink()
                 except Exception:
-                    logger.warning(
-                        "cleanup failed: %s",
-                        path
-                    )
+                    logger.warning("cleanup failed: %s", path)
 
     def _failed(self, code, message):
         logger.error("[%s] %s", code, message)
