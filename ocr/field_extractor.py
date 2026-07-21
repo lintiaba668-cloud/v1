@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
-"""Engineering report field extraction based on OCR coordinates."""
+"""Engineering report field extraction based on OCR coordinates.
+
+Optimized for long power engineering project names that wrap across rows.
+"""
 
 import re
 
@@ -28,24 +31,43 @@ class FieldExtractor:
         }
 
     def extract_project_code(self, items):
+        candidates = []
+
         for item in items:
             text = item.get('text', '')
 
             if '工程编号' in text or '编号' in text:
                 nearby = self._nearby_text(items, item)
-                result = self.CODE_PATTERN.search(nearby)
+                candidates.extend(
+                    self.CODE_PATTERN.findall(nearby)
+                )
 
-                if result:
-                    return result.group(0)
+        if not candidates:
+            for item in items:
+                candidates.extend(
+                    self.CODE_PATTERN.findall(
+                        item.get('text', '')
+                    )
+                )
 
-        for item in items:
-            result = self.CODE_PATTERN.search(
-                item.get('text', '')
-            )
-            if result:
-                return result.group(0)
+        return self._select_code(candidates)
 
-        return ''
+    def _select_code(self, candidates):
+        if not candidates:
+            return ''
+
+        # 优先选择包含数字和符号的工程编号格式
+        ranked = sorted(
+            candidates,
+            key=lambda x: (
+                '-' in x,
+                any(c.isalpha() for c in x),
+                len(x)
+            ),
+            reverse=True
+        )
+
+        return ranked[0]
 
     def extract_project_name(self, items):
         label = self._find_label(
@@ -62,28 +84,45 @@ class FieldExtractor:
             if item is label:
                 continue
 
-            # 优先读取标签右侧区域
+            text = item.get('text', '').strip()
+
+            if not text:
+                continue
+
+            if text in IGNORE_FIELDS:
+                continue
+
+            # 同行右侧
             same_row = abs(
                 item.get('y', 0) - label.get('y', 0)
-            ) < 80
+            ) < 100
 
-            right_side = item.get('x', 0) > label.get('x', 0)
-
-            if same_row and right_side:
-                text = item.get('text', '').strip()
-                if text and text not in IGNORE_FIELDS:
-                    candidates.append(item)
-
-        if candidates:
-            return ''.join(
-                item.get('text', '')
-                for item in sorted(
-                    candidates,
-                    key=lambda x: x.get('x', 0)
-                )
+            # 下一行同一单元格区域
+            next_row = (
+                item.get('y', 0) > label.get('y', 0)
+                and item.get('y', 0) - label.get('y', 0) < 300
+                and item.get('x', 0) >= label.get('x', 0)
             )
 
-        return ''
+            if same_row or next_row:
+                candidates.append(item)
+
+        if not candidates:
+            return ''
+
+        candidates.sort(
+            key=lambda x: (
+                x.get('y', 0),
+                x.get('x', 0)
+            )
+        )
+
+        result = ''.join(
+            item.get('text', '')
+            for item in candidates
+        )
+
+        return result
 
     def _find_label(self, items, keyword):
         for item in items:
