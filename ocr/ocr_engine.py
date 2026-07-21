@@ -13,6 +13,7 @@ from .image_preprocess import preprocess
 from .ocr_executor import OCRExecutor
 from .orientation_detector import OrientationDetector
 from .document_detector import DocumentDetector
+from .field_pipeline import FieldPipeline
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
 from core.status import OCRStatus
@@ -36,6 +37,7 @@ class OCREngine:
 
         self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
+        self.field_pipeline = FieldPipeline()
 
         self.status = OCRStatus.CHECKING
         self._validate_engine()
@@ -93,26 +95,13 @@ class OCREngine:
 
         try:
             import cv2
-
             image = cv2.imread(str(image_path))
+
             if image is None:
                 return str(image_path)
 
-            rotated = self.orientation.rotate_image(
-                image,
-                angle
-            )
-
-            cv2.imwrite(
-                str(output_path),
-                rotated
-            )
-
-            logger.info(
-                'image rotated: %s degree',
-                angle
-            )
-
+            rotated = self.orientation.rotate_image(image, angle)
+            cv2.imwrite(str(output_path), rotated)
             return str(output_path)
 
         except Exception:
@@ -121,13 +110,7 @@ class OCREngine:
 
     def _prepare_image(self, image_path, output_path):
         current = str(image_path)
-
         angle = self.orientation.detect(current)
-
-        logger.info(
-            'orientation result: %s',
-            angle
-        )
 
         rotated_path = self._rotate_if_needed(
             current,
@@ -149,21 +132,10 @@ class OCREngine:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp_path = Path(temp.name)
 
-            logger.info('OCR start: %s', image_path)
+            prepared = self._prepare_image(image_path, temp_path)
+            preprocess(prepared, str(temp_path))
 
-            prepared = self._prepare_image(
-                image_path,
-                temp_path
-            )
-
-            preprocess(
-                prepared,
-                str(temp_path)
-            )
-
-            executor_result = self.executor.execute(
-                str(temp_path)
-            )
+            executor_result = self.executor.execute(str(temp_path))
 
             if not executor_result['success']:
                 return OCRResult(
@@ -174,11 +146,18 @@ class OCREngine:
                 ).to_dict()
 
             parsed = self._parse_tsv(executor_result['tsv_file'])
-            report = parse_report_text(parsed['raw_text'])
+
+            pipeline_result = self.field_pipeline.process(
+                parsed['items']
+            )
+
+            report = parse_report_text(
+                pipeline_result['layout_text']
+            )
 
             return OCRResult(
                 image=str(image_path),
-                raw_text=parsed['raw_text'],
+                raw_text=pipeline_result['layout_text'],
                 items=parsed['items'],
                 project_name=report.get('project_name', ''),
                 project_code=report.get('project_code', ''),
