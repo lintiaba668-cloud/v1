@@ -51,14 +51,12 @@ class OCREngine:
     def _load_ocr_region(self):
         default = {'enabled': True, 'top_percent': 25}
         config_path = get_resource_path('config.json')
-
         try:
             if config_path.exists():
                 config = json.loads(config_path.read_text(encoding='utf-8'))
                 default.update(config.get('ocr_region', {}))
         except Exception:
             logger.exception('load OCR region config failed')
-
         return default
 
     def _validate_engine(self):
@@ -67,9 +65,7 @@ class OCREngine:
             self.tessdata / 'chi_sim.traineddata',
             self.tessdata / 'eng.traineddata'
         ]
-
         missing = [str(item) for item in required if not item.exists()]
-
         if missing:
             self.enabled = False
             self.status = OCRStatus.FAILED
@@ -95,9 +91,13 @@ class OCREngine:
                     })
                     texts.append(text)
 
+        logger.info('[OCR_DATA] box_count=%s', len(items))
+
         return {'items': items, 'raw_text': '\n'.join(texts)}
 
     def _recognize_with_region(self, image_path, temp_path, region):
+        logger.info('[OCR_REGION] top_percent=%s', region)
+
         preprocess(str(image_path), str(temp_path), {
             'enabled': True,
             'top_percent': region
@@ -109,7 +109,17 @@ class OCREngine:
             return None, executor_result
 
         parsed = self._parse_tsv(executor_result['tsv_file'])
+
+        logger.info('[FIELD] input_boxes=%s', len(parsed['items']))
+
         pipeline_result = self.field_pipeline.process(parsed['items'])
+
+        fields = pipeline_result.get('fields', {})
+        logger.info(
+            '[FIELD] project_name=%s project_code=%s',
+            fields.get('project_name', ''),
+            fields.get('project_code', '')
+        )
 
         return pipeline_result, executor_result
 
@@ -173,7 +183,6 @@ class OCREngine:
         finally:
             if executor_result:
                 self.executor.cleanup(executor_result)
-
             if temp_path and temp_path.exists():
                 temp_path.unlink()
 
