@@ -27,26 +27,33 @@ class FieldExtractor:
             'project_name': self.extract_project_name(items),
             'project_code': self.extract_project_code(items)
         }
-
         logger.info(
             '[FIELD_EXTRACT] name=%s code=%s',
             result['project_name'],
             result['project_code']
         )
-
         return result
 
     def extract_project_code(self, items):
+        label = self._find_label(items, '工程编号')
+
+        if not label:
+            label = self._find_split_label(items, ['工', '程', '编', '号'])
+
         candidates = []
 
-        for item in items:
-            text = item.get('text', '')
-            if '工程编号' in text or text == '编号':
-                candidates.extend(
-                    self.CODE_PATTERN.findall(
-                        self._nearby_text(items, item)
-                    )
-                )
+        if label:
+            for item in items:
+                text = item.get('text', '').strip()
+                if not text:
+                    continue
+
+                dx = item.get('x', 0) - label.get('x', 0)
+                dy = item.get('y', 0) - label.get('y', 0)
+
+                # 工程编号通常位于标签右侧或下一行
+                if (dx > 0 and abs(dy) < 150) or (0 < dy < 300):
+                    candidates.extend(self.CODE_PATTERN.findall(text))
 
         if not candidates:
             for item in items:
@@ -74,52 +81,36 @@ class FieldExtractor:
         label = self._find_label(items, '工程名称')
 
         if not label:
-            label = self._find_split_label(items)
+            label = self._find_split_label(items, ['工', '程', '名', '称'])
 
         if not label:
             logger.warning('[FIELD_EXTRACT] project name label missing')
             return ''
 
         candidates = []
-
         for item in items:
             text = item.get('text', '').strip()
-
             if not text or text in IGNORE_FIELDS:
                 continue
 
-            score = self._name_region_score(label, item)
-
-            if score >= 3:
+            if self._name_region_score(label, item) >= 3:
                 candidates.append(item)
 
-        candidates.sort(
-            key=lambda x: (
-                x.get('y', 0),
-                x.get('x', 0)
-            )
-        )
+        candidates.sort(key=lambda x: (x.get('y', 0), x.get('x', 0)))
 
-        return ''.join(
-            item.get('text', '')
-            for item in candidates
-        )
+        return ''.join(item.get('text', '') for item in candidates)
 
     def _name_region_score(self, label, item):
         score = 0
-
         dx = item.get('x', 0) - label.get('x', 0)
         dy = item.get('y', 0) - label.get('y', 0)
 
-        # 同行右侧优先
-        if dy >= -50 and dy <= 120 and dx > 0:
+        if -50 <= dy <= 120 and dx > 0:
             score += 3
 
-        # 下一行同单元格
         if 0 < dy < 500 and dx > -100:
             score += 2
 
-        # 过滤明显后续字段
         if text_after_label(item.get('text', '')):
             score -= 10
 
@@ -131,10 +122,10 @@ class FieldExtractor:
                 return item
         return None
 
-    def _find_split_label(self, items):
+    def _find_split_label(self, items, chars):
         words = [
             item for item in items
-            if item.get('text', '') in ['工', '程', '名', '称']
+            if item.get('text', '') in chars
         ]
 
         if len(words) < 2:
@@ -142,15 +133,8 @@ class FieldExtractor:
 
         words.sort(key=lambda x: x.get('y', 0))
         merged = dict(words[0])
-        merged['text'] = '工程名称'
+        merged['text'] = ''.join(chars)
         return merged
-
-    def _nearby_text(self, items, target):
-        return ''.join(
-            item.get('text', '')
-            for item in items
-            if abs(item.get('y', 0)-target.get('y', 0)) < 250
-        )
 
 
 def text_after_label(text):
