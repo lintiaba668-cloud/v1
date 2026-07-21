@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
-"""OCR coordinate layout reconstruction.
+"""OCR coordinate layout reconstruction."""
 
-Rebuilds text order from TSV boxes instead of relying only on OCR raw text.
-Designed for engineering reports where Chinese characters may be split.
-"""
+import logging
+
+logger = logging.getLogger("PowerRename.TextLayout")
 
 
 class TextLayout:
@@ -14,8 +14,6 @@ class TextLayout:
         self.x_gap_threshold = x_gap_threshold
 
     def rebuild_lines(self, items):
-        """Group OCR boxes into visual lines."""
-
         lines = []
 
         ordered = sorted(
@@ -30,9 +28,7 @@ class TextLayout:
             matched = None
 
             for line in lines:
-                if abs(
-                    line['y'] - item.get('y', 0)
-                ) <= self.y_threshold:
+                if abs(line['y'] - item.get('y', 0)) <= self.y_threshold:
                     matched = line
                     break
 
@@ -59,27 +55,23 @@ class TextLayout:
                 'text': self.merge_items(chars)
             })
 
+        result = self.merge_vertical_labels(result)
+
         return result
 
     def merge_items(self, items):
-        """Merge OCR boxes while preserving engineering symbols."""
-
         result = ''
-
         previous = None
 
         for item in items:
             text = item.get('text', '')
-
             if not text:
                 continue
 
             if previous:
                 gap = item.get('x', 0) - (
-                    previous.get('x', 0)
-                    + previous.get('w', 0)
+                    previous.get('x', 0) + previous.get('w', 0)
                 )
-
                 if gap > self.x_gap_threshold:
                     result += ''
 
@@ -88,9 +80,39 @@ class TextLayout:
 
         return result
 
+    def merge_vertical_labels(self, lines):
+        """Recover labels split into vertical single characters."""
+
+        merged = []
+        index = 0
+
+        while index < len(lines):
+            current = lines[index]
+
+            texts = [
+                current.get('text', '')
+            ]
+
+            if index + 3 < len(lines):
+                texts = [
+                    lines[index+i].get('text', '')
+                    for i in range(4)
+                ]
+
+                if ''.join(texts) in ['工程名称', '工程编号']:
+                    new_line = dict(current)
+                    new_line['text'] = ''.join(texts)
+                    merged.append(new_line)
+                    index += 4
+                    continue
+
+            merged.append(current)
+            index += 1
+
+        return merged
+
     def rebuild_text(self, items):
         lines = self.rebuild_lines(items)
-
         return '\n'.join(
             line['text']
             for line in lines
