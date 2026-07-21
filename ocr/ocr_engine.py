@@ -5,6 +5,7 @@ Win7兼容版：程序目录内OCR + TSV坐标解析
 
 from pathlib import Path
 import csv
+import json
 import logging
 import tempfile
 
@@ -35,6 +36,8 @@ class OCREngine:
         self.ocr_exe = get_resource_path('engine/tesseract.exe')
         self.tessdata = get_resource_path('engine/tessdata')
 
+        self.ocr_region = self._load_ocr_region()
+
         self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
         self.field_pipeline = FieldPipeline()
@@ -44,6 +47,46 @@ class OCREngine:
 
         if self.enabled:
             self.status = OCRStatus.READY
+
+    def _load_ocr_region(self):
+        """Load OCR area configuration.
+
+        Keeps deployment flexible without changing code.
+        """
+
+        default = {
+            'enabled': True,
+            'top_percent': 25
+        }
+
+        config_path = get_resource_path('config.json')
+
+        try:
+            if config_path.exists():
+                config = json.loads(
+                    config_path.read_text(
+                        encoding='utf-8'
+                    )
+                )
+
+                region = config.get(
+                    'ocr_region',
+                    {}
+                )
+
+                default.update(region)
+
+        except Exception:
+            logger.exception(
+                'load OCR region config failed'
+            )
+
+        logger.info(
+            'OCR region config: %s',
+            default
+        )
+
+        return default
 
     def _validate_engine(self):
         required = [
@@ -133,7 +176,11 @@ class OCREngine:
                 temp_path = Path(temp.name)
 
             prepared = self._prepare_image(image_path, temp_path)
-            preprocess(prepared, str(temp_path))
+            preprocess(
+                prepared,
+                str(temp_path),
+                self.ocr_region
+            )
 
             executor_result = self.executor.execute(str(temp_path))
 
