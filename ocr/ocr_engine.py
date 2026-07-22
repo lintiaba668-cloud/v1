@@ -16,6 +16,7 @@ from .orientation_detector import OrientationDetector
 from .document_detector import DocumentDetector
 from .field_pipeline import FieldPipeline
 from .adaptive_region import AdaptiveOCRRegion
+from .ocr_scorer import OCRScorer
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
 from core.status import OCRStatus
@@ -37,6 +38,7 @@ class OCREngine:
         self.tessdata = get_resource_path('engine/tessdata')
         self.ocr_region = self._load_ocr_region()
         self.adaptive_region = AdaptiveOCRRegion()
+        self.scorer = OCRScorer()
 
         self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
@@ -92,7 +94,6 @@ class OCREngine:
                     texts.append(text)
 
         logger.info('[OCR_DATA] box_count=%s', len(items))
-
         return {'items': items, 'raw_text': '\n'.join(texts)}
 
     def _recognize_with_region(self, image_path, temp_path, region):
@@ -109,17 +110,15 @@ class OCREngine:
             return None, executor_result
 
         parsed = self._parse_tsv(executor_result['tsv_file'])
-
-        logger.info('[FIELD] input_boxes=%s', len(parsed['items']))
-
         pipeline_result = self.field_pipeline.process(parsed['items'])
-
         fields = pipeline_result.get('fields', {})
-        logger.info(
-            '[FIELD] project_name=%s project_code=%s',
-            fields.get('project_name', ''),
-            fields.get('project_code', '')
+
+        pipeline_result['score'] = self.scorer.score(
+            fields,
+            pipeline_result.get('layout_text', '')
         )
+
+        logger.info('[OCR_SCORE] %s', pipeline_result['score'])
 
         return pipeline_result, executor_result
 
@@ -132,7 +131,7 @@ class OCREngine:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
                 temp_path = Path(temp.name)
 
-            final_pipeline = None
+            best = None
 
             for region in self.adaptive_region.candidates():
                 pipeline_result, executor_result = self._recognize_with_region(
@@ -142,16 +141,14 @@ class OCREngine:
                 )
 
                 if pipeline_result:
-                    fields = pipeline_result.get('fields', {})
-                    if not self.adaptive_region.need_expand(fields):
-                        final_pipeline = pipeline_result
-                        break
+                    if best is None or pipeline_result['score'] > best['score']:
+                        best = pipeline_result
 
                 if executor_result:
                     self.executor.cleanup(executor_result)
                     executor_result = None
 
-            if not final_pipeline:
+            if not best:
                 return OCRResult(
                     image=str(image_path),
                     status=OCRStatus.FAILED,
@@ -159,12 +156,12 @@ class OCREngine:
                     error_message='未找到有效OCR字段'
                 ).to_dict()
 
-            fields = final_pipeline.get('fields', {})
-            fallback = parse_report_text(final_pipeline['layout_text'])
+            fields = best.get('fields', {})
+            fallback = parse_report_text(best['layout_text'])
 
             return OCRResult(
                 image=str(image_path),
-                raw_text=final_pipeline['layout_text'],
+                raw_text=best['layout_text'],
                 project_name=fields.get('project_name') or fallback.get('project_name', ''),
                 project_code=fields.get('project_code') or fallback.get('project_code', ''),
                 status=OCRStatus.FINISHED,
