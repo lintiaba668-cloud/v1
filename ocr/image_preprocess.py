@@ -1,11 +1,14 @@
 """
-OCR图片预处理模块 V2.4
-增加尺寸自适应，避免手机原图过大影响Tesseract布局分析。
+OCR图片预处理模块 V3.2
+增加文档透视矫正，提升手机拍照资料OCR稳定性。
 """
 
 import logging
 from pathlib import Path
+
 from PIL import Image, ImageOps, ImageEnhance, ImageFilter, ImageChops
+
+from .document_rectifier import rectify_document
 
 logger = logging.getLogger("PowerRename.OCR")
 
@@ -31,6 +34,10 @@ def preprocess(image_path, output_path, ocr_region=None):
     img = ImageOps.exif_transpose(img)
     img.save(DEBUG_DIR / '02_rotate.jpg')
 
+    # Mobile photo document correction
+    img = rectify_document(img)
+    img.save(DEBUG_DIR / '03_rectify.jpg')
+
     region = ocr_region or DEFAULT_REGION
 
     if region.get('enabled', False):
@@ -40,10 +47,10 @@ def preprocess(image_path, output_path, ocr_region=None):
     else:
         logger.info('[CROP] disabled')
 
-    img.save(DEBUG_DIR / '03_crop.jpg')
+    img.save(DEBUG_DIR / '04_crop.jpg')
 
     img = resize_for_ocr(img, MAX_SIDE)
-    img.save(DEBUG_DIR / '04_resize.jpg')
+    img.save(DEBUG_DIR / '05_resize.jpg')
 
     img = trim_border(img)
 
@@ -51,7 +58,7 @@ def preprocess(image_path, output_path, ocr_region=None):
     img = ImageEnhance.Contrast(img).enhance(1.3)
     img = img.filter(ImageFilter.SHARPEN)
 
-    img.save(DEBUG_DIR / '05_enhance.jpg')
+    img.save(DEBUG_DIR / '06_enhance.jpg')
 
     logger.info('[PREPROCESS] output width=%s height=%s', img.width, img.height)
 
