@@ -7,8 +7,13 @@ Used before matching OCR project names with local project database.
 
 import re
 
+from .alias_dictionary import get_aliases
+
 
 class ProjectNormalizer:
+
+    def __init__(self):
+        self.aliases = get_aliases()
 
     def normalize(self, text):
         if not text:
@@ -16,14 +21,7 @@ class ProjectNormalizer:
 
         text = text.strip()
 
-        replacements = {
-            '土庄变': '上庄变',
-            '兰山': '栏山',
-            '401杆': '#01杆',
-            '4变': '#4变'
-        }
-
-        for old, new in replacements.items():
+        for old, new in self.aliases.items():
             text = text.replace(old, new)
 
         text = re.sub(r'\s+', '', text)
