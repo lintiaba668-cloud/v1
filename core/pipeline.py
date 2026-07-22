@@ -7,12 +7,14 @@ from pathlib import Path
 
 from ocr.ocr_engine import OCREngine
 from core.rename import rename_file
+from project.resolver import ProjectResolver
 
 
 class RenamePipeline:
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
         self.ocr = OCREngine()
+        self.project_resolver = ProjectResolver()
 
     def process_text_result(self, image_path, text):
         result = self.ocr.parse_text(text)
@@ -23,9 +25,14 @@ class RenamePipeline:
         if not project_name:
             return None
 
+        resolved = self.project_resolver.resolve(
+            project_name,
+            project_code
+        )
+
         return rename_file(
             image_path,
             self.output_dir,
-            project_name,
-            project_code
+            resolved.project_name,
+            resolved.project_code
         )
