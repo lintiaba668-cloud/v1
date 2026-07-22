@@ -35,6 +35,7 @@ class ProjectDatabase:
     def find_by_code(self, code):
         if not code:
             return None
+
         conn = self.connect()
         cur = conn.cursor()
         cur.execute(
@@ -43,9 +44,29 @@ class ProjectDatabase:
         )
         row = cur.fetchone()
         conn.close()
+
         if not row:
             return None
+
         return {
             'project_code': row[0],
             'project_name': row[1]
         }
+
+    def list_all(self):
+        conn = self.connect()
+        cur = conn.cursor()
+        cur.execute(
+            'SELECT project_code, project_name, normalized_name FROM projects'
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                'project_code': row[0],
+                'project_name': row[1],
+                'normalized_name': row[2] or ''
+            }
+            for row in rows
+        ]
