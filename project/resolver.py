@@ -13,7 +13,7 @@ class ProjectResolver:
 
     def resolve(self, project_name='', project_code=''):
 
-        # 1. code exact match
+        # 1. project code exact match
         result = self.db.find_by_code(project_code)
 
         if result:
@@ -25,7 +25,32 @@ class ProjectResolver:
                 source='code'
             )
 
-        # 2. name matching reserved for next stage
+        # 2. project name fuzzy matching
+        if project_name:
+            best = None
+            best_score = 0
+
+            for item in self.db.list_all():
+                score = self.matcher.score(
+                    project_name,
+                    item['project_name']
+                )
+
+                if score > best_score:
+                    best_score = score
+                    best = item
+
+            # Conservative threshold
+            if best and best_score >= 75:
+                return MatchResult(
+                    project_name=best['project_name'],
+                    project_code=best['project_code'],
+                    matched=True,
+                    score=best_score,
+                    source='name'
+                )
+
+        # 3. keep OCR result
         return MatchResult(
             project_name=project_name,
             project_code=project_code,
