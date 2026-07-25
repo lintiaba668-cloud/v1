@@ -2,10 +2,7 @@
 
 """Real power engineering report validation framework.
 
-This test file defines expected business cases.
-Actual image files should be placed in tests/data/reports.
-
-It intentionally does not fabricate OCR results.
+Actual customer image files are supplied externally and are not committed.
 """
 
 from pathlib import Path
@@ -15,13 +12,12 @@ from rename.filename_rule import FilenameRule
 
 DATA_DIR = Path(__file__).parent / "data" / "reports"
 
-
 CASES = [
     {
         "name": "start_report",
         "report_type": FilenameRule.REPORT_START,
         "image": "001.jpg",
-        "expected": "工程名称.jpg"
+        "expected": "工程名称_工程编号_开工.jpg"
     },
     {
         "name": "completion_report_code_hash",
@@ -43,7 +39,6 @@ def test_report_data_directory_exists():
 
     The repository should not contain customer documents.
     """
-
     assert DATA_DIR.name == "reports"
 
 
