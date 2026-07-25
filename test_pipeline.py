@@ -1,6 +1,6 @@
 """
-PowerRename OCR流程测试。
-测试：图片 -> OCR -> 工程名称/编号解析。
+PowerRename OCR流程手工测试。
+测试：图片 -> 自动转正 -> 模板字段OCR -> 工程名称/编号候选。
 """
 
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 from ocr.pipeline_ocr import OCRPipeline
 
 
-def test_image(path):
+def run_image_test(path):
     image_path = Path(str(path).strip().strip('"'))
 
     if not image_path.is_file():
@@ -26,8 +26,22 @@ def test_image(path):
 
     data = result.get('data', {})
     print('报告类型:', data.get('report_type', ''))
+    print('旋转角度:', data.get('rotation_angle', 0))
+    print('识别来源:', data.get('source', ''))
     print('工程名称:', data.get('project_name', ''))
     print('工程编号:', data.get('project_code', ''))
+    print('名称候选:')
+    for index, value in enumerate(
+        data.get('project_name_candidates', []),
+        1,
+    ):
+        print('  {}. {}'.format(index, value))
+    print('编号候选:')
+    for index, value in enumerate(
+        data.get('project_code_candidates', []),
+        1,
+    ):
+        print('  {}. {}'.format(index, value))
     print('有效:', result.get('valid'))
     print('错误:', result.get('error', ''))
 
@@ -42,7 +56,8 @@ def test_image(path):
             'x=', item.get('x', 0),
             'y=', item.get('y', 0),
             'w=', item.get('w', 0),
-            'h=', item.get('h', 0)
+            'h=', item.get('h', 0),
+            'conf=', item.get('confidence', '')
         )
 
     return 0 if result.get('valid') else 1
@@ -51,4 +66,4 @@ def test_image(path):
 if __name__ == '__main__':
     print('请输入测试图片路径')
     image = input('> ').strip()
-    raise SystemExit(test_image(image))
+    raise SystemExit(run_image_test(image))
