@@ -83,6 +83,20 @@ class OCRRenameService:
                 'matched': False,
             }
 
+        if not project_code:
+            return {
+                'status': 'failed',
+                'source': str(image_path),
+                'target': '',
+                'error': '匹配到的工程明细缺少工程编号，无法按命名规则输出',
+                'ocr_project_name': ocr_project_name,
+                'ocr_project_code': ocr_project_code,
+                'report_type': report_type,
+                'project_name': project_name,
+                'project_code': '',
+                'matched': True,
+            }
+
         return self._rename_with_project(
             image_path=image_path,
             project_name=project_name,
@@ -144,13 +158,22 @@ class OCRRenameService:
         if not project_name:
             return self._review_error(original, '标准工程名称为空')
 
+        if not project_code:
+            return self._review_error(original, '标准工程编号为空')
+
         resolved_type = self._resolve_report_type(
             report_type,
             original
         )
 
-        # 开工报告即使从Excel匹配到工程编号，文件名也只使用工程名称。
-        filename_code = project_code if resolved_type == 'finish' else ''
+        # 竣工：工程名称_工程编号.jpg
+        # 开工：工程名称_工程编号_开工.jpg
+        filename_code = project_code
+        filename_tag = ''
+
+        if resolved_type == 'start':
+            filename_code = project_code + '_开工'
+            filename_tag = '开工'
 
         target = rename_file(
             image_path,
@@ -176,7 +199,8 @@ class OCRRenameService:
             ),
             'project_name': project_name,
             'project_code': project_code,
-            'filename_project_code': filename_code,
+            'filename_project_code': project_code,
+            'filename_tag': filename_tag,
             'matched': True,
             'manual_confirmed': bool(manual_confirmed),
             'match_source': match.get('match_source', ''),
