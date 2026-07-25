@@ -82,7 +82,7 @@ class MainWindowV3(QMainWindow):
         title.setStyleSheet('font-size: 20px; font-weight: bold;')
 
         rule = QLabel(
-            '命名规则：开工报告 = 工程名称.jpg；'
+            '命名规则：开工报告 = 工程名称_工程编号_开工.jpg；'
             '竣工验收报告 = 工程名称_工程编号.jpg。'
         )
         rule.setWordWrap(True)
