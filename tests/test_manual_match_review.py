@@ -24,6 +24,7 @@ def build_review_item(source):
         'status': 'review_required',
         'source': str(source),
         'target': '',
+        'report_type': 'finish',
         'ocr_project_name': '10kV湖峰线401杆迁改工程',
         'ocr_project_code': '',
         'match_score': 78.0,
@@ -38,7 +39,7 @@ def build_review_item(source):
     }
 
 
-def test_manual_review_renames_with_imported_standard_project(tmp_path):
+def test_manual_review_outputs_with_imported_standard_project(tmp_path):
     source = tmp_path / 'source.jpg'
     source.write_bytes(b'image')
     output_dir = tmp_path / 'output'
@@ -58,8 +59,9 @@ def test_manual_review_renames_with_imported_standard_project(tmp_path):
     assert result['match_source'] == 'manual_review'
     assert result['project_code'] == 'P001'
     assert result['project_name'] == '10kV福岭线#01杆迁改工程'
-    assert not source.exists()
+    assert source.exists()
     assert Path(result['target']).is_file()
+    assert Path(result['target']).name.endswith('_P001.jpg')
 
 
 def test_manual_review_rejects_project_not_in_imported_library(tmp_path):
