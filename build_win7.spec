@@ -36,6 +36,7 @@ hiddenimports = [
     'PIL',
     'ocr.ocr_engine',
     'ocr.ocr_executor',
+    'ocr.template_field_recognizer',
     'ocr.text_parser',
     'ocr.pipeline_ocr',
     'project.project_service',
