@@ -29,3 +29,41 @@ def test_multiline_name_merge():
     result = parse_report_text(text)
 
     assert '城龙线#035B分界开关新装业扩配套工程' in result.get('project_name', '')
+
+
+def test_finish_sparse_ocr_without_field_labels():
+    text = '''
+配网工程竣工验收报告
+福建莆田萄城区清前村H6变10kV重喜台区治理
+1813202400YP04
+施工单位
+莆田市电力工程有限公司
+'''
+
+    result = parse_report_text(text)
+
+    assert '10kV' in result.get('project_name', '')
+    assert '台区治理' in result.get('project_name', '')
+    assert result.get('project_code') == '1813202400YP04'
+
+
+def test_start_sparse_ocr_multiline_sentence():
+    text = '''
+配网工程开工报告
+我方完成 福建靖田荔城区
+疯边开闭所公恋10kv重载台区治理工程
+项目开工前的各项
+准备工作，计划于2025.6.12开工，请审批
+'''
+
+    result = parse_report_text(text)
+
+    assert '开闭所' in result.get('project_name', '')
+    assert result.get('project_name', '').endswith('治理工程')
+    assert result.get('project_code', '') == ''
+
+
+def test_latin_noise_is_not_project_code():
+    text = 'Ue Pal Ay SEs BF Wl Ai'
+    result = parse_report_text(text)
+    assert result.get('project_code', '') == ''
