@@ -22,7 +22,7 @@ class OCRRenameService:
                 'status': 'failed',
                 'source': str(image_path),
                 'target': '',
-                'error': result.get('error', 'OCR结果无有效工程名称'),
+                'error': result.get('error', 'OCR结果无有效目标字段'),
                 'ocr_project_name': '',
                 'ocr_project_code': '',
                 'report_type': '',
@@ -30,14 +30,19 @@ class OCRRenameService:
             }
 
         data = result.get('data', {})
-        ocr_project_name = data.get('project_name', '')
-        ocr_project_code = data.get('project_code', '')
         report_type = data.get('report_type', '')
-
-        match = self.project_service.match_project(
-            project_name=ocr_project_name,
-            project_code=ocr_project_code
+        name_candidates = self._deduplicate(
+            data.get('project_name_candidates', [])
+            or [data.get('project_name', '')]
         )
+        code_candidates = self._deduplicate(
+            data.get('project_code_candidates', [])
+            or [data.get('project_code', '')]
+        )
+
+        match = self._match_candidates(name_candidates, code_candidates)
+        selected_name = match.pop('_selected_ocr_name', '')
+        selected_code = match.pop('_selected_ocr_code', '')
 
         if not match.get('auto_accepted'):
             match_status = match.get('status', 'unmatched')
@@ -49,8 +54,14 @@ class OCRRenameService:
                 ),
                 'source': str(image_path),
                 'target': '',
-                'ocr_project_name': ocr_project_name,
-                'ocr_project_code': ocr_project_code,
+                'ocr_project_name': selected_name or (
+                    name_candidates[0] if name_candidates else ''
+                ),
+                'ocr_project_code': selected_code or (
+                    code_candidates[0] if code_candidates else ''
+                ),
+                'ocr_project_name_candidates': name_candidates,
+                'ocr_project_code_candidates': code_candidates,
                 'report_type': report_type,
                 'project_name': '',
                 'project_code': '',
@@ -77,8 +88,8 @@ class OCRRenameService:
                 'source': str(image_path),
                 'target': '',
                 'error': '匹配结果缺少标准工程名称',
-                'ocr_project_name': ocr_project_name,
-                'ocr_project_code': ocr_project_code,
+                'ocr_project_name': selected_name,
+                'ocr_project_code': selected_code,
                 'report_type': report_type,
                 'matched': False,
             }
@@ -89,23 +100,110 @@ class OCRRenameService:
                 'source': str(image_path),
                 'target': '',
                 'error': '匹配到的工程明细缺少工程编号，无法按命名规则输出',
-                'ocr_project_name': ocr_project_name,
-                'ocr_project_code': ocr_project_code,
+                'ocr_project_name': selected_name,
+                'ocr_project_code': selected_code,
                 'report_type': report_type,
                 'project_name': project_name,
                 'project_code': '',
                 'matched': True,
             }
 
+        original = dict(result)
+        original['ocr_project_name'] = selected_name
+        original['ocr_project_code'] = selected_code
+        original['ocr_project_name_candidates'] = name_candidates
+        original['ocr_project_code_candidates'] = code_candidates
+
         return self._rename_with_project(
             image_path=image_path,
             project_name=project_name,
             project_code=project_code,
             report_type=report_type,
-            original=result,
+            original=original,
             match=match,
             manual_confirmed=False
         )
+
+    def _match_candidates(self, name_candidates, code_candidates):
+        attempts = []
+        primary_name = name_candidates[0] if name_candidates else ''
+
+        # Code candidates are evaluated first. Exact or unique one-edit code
+        # matching is substantially safer than accepting raw OCR text.
+        for code in code_candidates:
+            matched = self.project_service.match_project(
+                project_name=primary_name,
+                project_code=code,
+            )
+            matched['_selected_ocr_name'] = primary_name
+            matched['_selected_ocr_code'] = code
+            attempts.append(matched)
+
+        # Each field OCR variant is matched independently. This allows one
+        # crop/PSM variant to fail while another still resolves the Excel row.
+        for name in name_candidates:
+            matched = self.project_service.match_project(
+                project_name=name,
+                project_code='',
+            )
+            matched['_selected_ocr_name'] = name
+            matched['_selected_ocr_code'] = ''
+            attempts.append(matched)
+
+        if not attempts:
+            return {
+                'status': 'unmatched',
+                'auto_accepted': False,
+                'match_source': 'none',
+                'reason': 'empty_ocr_candidates',
+                'score': 0.0,
+                'margin': 0.0,
+                'project_code': '',
+                'project_name': '',
+                'suggested_project_code': '',
+                'suggested_project_name': '',
+                'candidates': [],
+                '_selected_ocr_name': '',
+                '_selected_ocr_code': '',
+            }
+
+        attempts.sort(key=self._match_rank, reverse=True)
+        return attempts[0]
+
+    @staticmethod
+    def _match_rank(result):
+        status_rank = {
+            'matched': 3,
+            'uncertain': 2,
+            'unmatched': 1,
+        }.get(result.get('status', ''), 0)
+        source_rank = {
+            'project_code': 3,
+            'project_code_fuzzy': 2,
+            'project_name': 1,
+        }.get(result.get('match_source', ''), 0)
+
+        return (
+            status_rank,
+            bool(result.get('auto_accepted')),
+            source_rank,
+            float(result.get('score', 0.0)),
+            float(result.get('margin', 0.0)),
+        )
+
+    @staticmethod
+    def _deduplicate(values):
+        result = []
+        seen = set()
+
+        for value in values or []:
+            text = str(value or '').strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+
+        return result
 
     def confirm_review(self, review_result, selected_project_code):
         item = dict(review_result or {})
@@ -166,8 +264,6 @@ class OCRRenameService:
             original
         )
 
-        # 竣工：工程名称_工程编号.jpg
-        # 开工：工程名称_工程编号_开工.jpg
         filename_code = project_code
         filename_tag = ''
 
@@ -196,6 +292,12 @@ class OCRRenameService:
                 'ocr_project_code',
                 original.get('data', {}).get('project_code', '')
                 if isinstance(original.get('data'), dict) else ''
+            ),
+            'ocr_project_name_candidates': original.get(
+                'ocr_project_name_candidates', []
+            ),
+            'ocr_project_code_candidates': original.get(
+                'ocr_project_code_candidates', []
             ),
             'project_name': project_name,
             'project_code': project_code,
