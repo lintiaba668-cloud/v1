@@ -76,7 +76,6 @@ class OCREngine:
 
     def _parse_tsv(self, tsv_file):
         items = []
-        texts = []
 
         with open(tsv_file, 'r', encoding='utf-8') as file:
             reader = csv.DictReader(file, delimiter='\t')
@@ -90,14 +89,56 @@ class OCREngine:
                         'y': int(row.get('top', 0)),
                         'w': int(row.get('width', 0)),
                         'h': int(row.get('height', 0)),
-                        'line': row.get('line_num', ''),
+                        'page': row.get('page_num', ''),
                         'block': row.get('block_num', ''),
-                        'paragraph': row.get('par_num', '')
+                        'paragraph': row.get('par_num', ''),
+                        'line': row.get('line_num', '')
                     })
-                    texts.append(text)
 
         logger.info('[OCR_DATA] box_count=%s', len(items))
-        return {'items': items, 'raw_text': '\n'.join(texts)}
+        return {
+            'items': items,
+            'raw_text': self._rebuild_native_text(items)
+        }
+
+    @staticmethod
+    def _rebuild_native_text(items):
+        """按 Tesseract TSV 原生 block/paragraph/line 重建文本。
+
+        这条文本用于字段解析；现有 TextLayout 仍保留给坐标定位模块使用。
+        """
+        groups = {}
+
+        for item in items:
+            key = (
+                item.get('page', ''),
+                item.get('block', ''),
+                item.get('paragraph', ''),
+                item.get('line', ''),
+                item.get('y', 0)
+            )
+            groups.setdefault(key, []).append(item)
+
+        ordered_groups = sorted(
+            groups.items(),
+            key=lambda pair: (
+                min(value.get('y', 0) for value in pair[1]),
+                min(value.get('x', 0) for value in pair[1])
+            )
+        )
+
+        lines = []
+        for _, words in ordered_groups:
+            words = sorted(words, key=lambda value: value.get('x', 0))
+            line = ' '.join(
+                value.get('text', '')
+                for value in words
+                if value.get('text', '')
+            ).strip()
+            if line:
+                lines.append(line)
+
+        return '\n'.join(lines)
 
     def _recognize_with_region(self, image_path, temp_path, region):
         logger.info('[OCR_REGION] top_percent=%s', region)
@@ -115,9 +156,10 @@ class OCREngine:
         parsed = self._parse_tsv(executor_result['tsv_file'])
         pipeline_result = self.field_pipeline.process(parsed['items'])
 
+        native_text = parsed.get('raw_text', '')
         layout_text = pipeline_result.get('layout_text', '')
-        raw_text = layout_text or parsed.get('raw_text', '')
-        fallback = parse_report_text(raw_text)
+        parse_text = native_text or layout_text
+        fallback = parse_report_text(parse_text)
         coordinate_fields = pipeline_result.get('fields', {})
 
         fields = {
@@ -133,8 +175,9 @@ class OCREngine:
 
         pipeline_result['fields'] = fields
         pipeline_result['items'] = parsed['items']
-        pipeline_result['raw_text'] = raw_text
-        pipeline_result['score'] = self.scorer.score(fields, raw_text)
+        pipeline_result['raw_text'] = parse_text
+        pipeline_result['layout_text'] = layout_text
+        pipeline_result['score'] = self.scorer.score(fields, parse_text)
 
         logger.info('[OCR_SCORE] %s fields=%s', pipeline_result['score'], fields)
         return pipeline_result, executor_result
