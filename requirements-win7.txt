@@ -1,0 +1,7 @@
+# PowerRename Win7 release environment
+# Build separately with Python 3.8 x86 and Python 3.8 x64.
+PyQt5==5.15.2
+openpyxl==3.1.2
+Pillow==9.5.0
+PyInstaller==4.10
+pytest==7.4.4
