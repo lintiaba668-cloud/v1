@@ -80,12 +80,12 @@ class MainWindowV3(QMainWindow):
             )
 
     def review_pending_results(self, results):
-        """Review uncertain candidates and replace confirmed result rows."""
+        """Review uncertain/unmatched candidates and replace confirmed rows."""
         reviewed_count = 0
         rename_service = self.runner.processor.service
 
         for index, item in enumerate(list(results)):
-            if item.get('status') != 'review_required':
+            if item.get('status') not in ('review_required', 'unmatched'):
                 continue
 
             candidates = item.get('candidates') or []
