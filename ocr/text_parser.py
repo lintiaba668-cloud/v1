@@ -35,7 +35,10 @@ EXCLUDED_NAME_LINES = (
 )
 
 VOLTAGE_PATTERN = re.compile(r'(?:10|35|110|220)\s*[kK][vV]')
-CODE_TOKEN_PATTERN = re.compile(r'(?<![A-Z0-9])([A-Z0-9][A-Z0-9\-]{7,22})(?![A-Z0-9])')
+MARKED_CODE_PATTERN = re.compile(r'([#A-Z0-9][#A-Z0-9\-]{3,22})')
+FALLBACK_CODE_PATTERN = re.compile(
+    r'(?<![#A-Z0-9])([A-Z0-9][A-Z0-9\-]{7,22})(?![#A-Z0-9])'
+)
 
 
 def normalize_ocr_text(text):
@@ -207,7 +210,7 @@ def _clean_name(text):
         value = value.replace(word, '')
 
     # 避免把独立工程编号拼到工程名称尾部。
-    value = re.sub(r'[A-Z0-9][A-Z0-9\-]{9,22}$', '', value)
+    value = re.sub(r'[#A-Z0-9][#A-Z0-9\-]{3,22}$', '', value)
     value = value.strip('：:，,。.;；|丨[]【】()（）')
 
     return value
@@ -215,13 +218,14 @@ def _clean_name(text):
 
 def extract_project_name(text):
     value = normalize_ocr_text(text)
+    compact = clean_text(value)
 
-    if '开工报告' in value or '我方完成' in value:
+    if '开工报告' in compact or '我方完成' in compact:
         name = extract_open_report_name(value)
         if name:
             return name
 
-    if '竣工验收报告' in value or '工程编号' in value:
+    if '竣工验收报告' in compact or '工程编号' in compact:
         name = extract_completion_name(value)
         if name:
             return name
@@ -233,8 +237,15 @@ def extract_project_name(text):
     return extract_open_report_name(value)
 
 
+def _add_code_candidates(candidates, value, marked):
+    pattern = MARKED_CODE_PATTERN if marked else FALLBACK_CODE_PATTERN
+
+    for candidate in pattern.findall(value or ''):
+        candidates.append((candidate, bool(marked)))
+
+
 def extract_project_code(text):
-    """提取工程编号；标签漏识别时按编号形态保守兜底。"""
+    """提取工程编号；无标签时采用严格形态规则，避免正文数字误判。"""
     lines = split_ocr_lines(normalize_ocr_text(text).upper())
     candidates = []
 
@@ -244,43 +255,47 @@ def extract_project_code(text):
                 continue
 
             tail = line.split(marker, 1)[1]
-            candidates.extend(CODE_TOKEN_PATTERN.findall(tail))
+            _add_code_candidates(candidates, tail, True)
 
             if index + 1 < len(lines):
-                candidates.extend(CODE_TOKEN_PATTERN.findall(lines[index + 1]))
+                _add_code_candidates(candidates, lines[index + 1], True)
 
-    # PSM 11 经常把“工程编号”标签和编号拆成独立行。
+    # 标签漏识别时，只接受较长、数字占比较高的独立编号。
     for line in lines:
-        candidates.extend(CODE_TOKEN_PATTERN.findall(line))
+        _add_code_candidates(candidates, line, False)
 
     valid = []
 
-    for candidate in candidates:
-        code = re.sub(r'[^A-Z0-9\-]', '', candidate)
-        compact = code.replace('-', '')
+    for candidate, marked in candidates:
+        code = re.sub(r'[^#A-Z0-9\-]', '', candidate)
+        compact = code.replace('-', '').replace('#', '')
         digit_count = sum(char.isdigit() for char in compact)
         letter_count = sum(char.isalpha() for char in compact)
 
-        if digit_count < 6:
+        if not compact or 'KV' in code or len(code) > 23:
             continue
 
-        if digit_count / float(max(1, len(compact))) < 0.45:
-            continue
+        if marked:
+            if len(compact) < 4 or digit_count < 2:
+                continue
+        else:
+            if digit_count < 6:
+                continue
+            if digit_count / float(max(1, len(compact))) < 0.45:
+                continue
 
-        if 'KV' in code or len(code) > 22:
-            continue
-
-        valid.append((code, digit_count, letter_count))
+        valid.append((code, marked, digit_count, letter_count))
 
     if not valid:
         return ''
 
     valid.sort(
         key=lambda item: (
-            10 <= len(item[0]) <= 18,
             item[1],
-            1 <= item[2] <= 5,
-            '-' in item[0],
+            10 <= len(item[0]) <= 18,
+            item[2],
+            1 <= item[3] <= 5,
+            '-' in item[0] or '#' in item[0],
             len(item[0]),
         ),
         reverse=True,
