@@ -5,6 +5,8 @@ OCR processing pipeline.
 Unified entry point for image recognition workflow.
 """
 
+from .engine import OCREngine
+
 
 class OCRPipeline:
 
@@ -20,7 +22,7 @@ class OCRPipeline:
         self.perspective = perspective
         self.header_detector = header_detector
         self.correction = correction
-        self.ocr_engine = ocr_engine
+        self.ocr_engine = ocr_engine or OCREngine()
 
     def process(self, image):
         current = image
@@ -43,20 +45,26 @@ class OCRPipeline:
             'confidence': 0
         }
 
-        if self.ocr_engine and regions:
-            name_text = self.ocr_engine.recognize(
+        if regions:
+            name_result = self.ocr_engine.recognize(
                 regions.get('name')
             )
-
-            code_text = self.ocr_engine.recognize(
+            code_result = self.ocr_engine.recognize(
                 regions.get('code')
             )
 
+            name_text = name_result.get('text', '')
+            code_text = code_result.get('text', '')
+
             if self.correction:
                 name_text = self.correction.correct(name_text)
+                code_text = self.correction.correct(code_text)
 
             result['project_name'] = name_text
             result['project_code'] = code_text
-            result['confidence'] = 1
+            result['confidence'] = min(
+                name_result.get('confidence', 0),
+                code_result.get('confidence', 0)
+            )
 
         return result
