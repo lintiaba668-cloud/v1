@@ -34,13 +34,19 @@ class OCRPipeline(object):
             }
 
     def _detect_report_type(self, data, text):
-        if '开工报告' in text or '我方完成' in text or '项目开工前' in text:
+        compact = ''.join(str(text or '').split())
+
+        if (
+            '开工报告' in compact
+            or '我方完成' in compact
+            or '项目开工前' in compact
+        ):
             return 'start'
 
         if (
             data.get('project_code')
-            or '竣工验收报告' in text
-            or '实际竣工日期' in text
+            or '竣工验收报告' in compact
+            or '实际竣工日期' in compact
         ):
             return 'finish'
 
