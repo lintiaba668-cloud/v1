@@ -89,6 +89,25 @@ def test_different_line_and_pole_are_penalized():
     assert detail['score'] < 65
 
 
+def test_photographed_start_report_is_corrected_by_excel_name():
+    standard = '福建莆田荔城区坑边开闭所公变10kV重载台区治理工程'
+    ocr_name = '福建靖田荔城区疯边开闭所公恋10kv重载台区治理工程'
+    service = FakeProjectService([
+        {
+            'project_code': '1813202400START',
+            'project_name': standard,
+        }
+    ])
+    manager = MatchManager(project_service=service)
+
+    result = manager.match_project(ocr_text=ocr_name)
+
+    assert result['status'] == 'matched'
+    assert result['auto_accepted'] is True
+    assert result['project_name'] == standard
+    assert result['score'] >= 76
+
+
 def test_batch_match_preserves_input_order_and_source():
     name = '莆田220kV上庄变10kV福岭线#01杆迁改工程'
     service = FakeProjectService([
