@@ -103,10 +103,7 @@ class OCREngine:
 
     @staticmethod
     def _rebuild_native_text(items):
-        """按 Tesseract TSV 原生 block/paragraph/line 重建文本。
-
-        这条文本用于字段解析；现有 TextLayout 仍保留给坐标定位模块使用。
-        """
+        """按 Tesseract TSV 原生 block/paragraph/line 重建文本。"""
         groups = {}
 
         for item in items:
@@ -114,8 +111,7 @@ class OCREngine:
                 item.get('page', ''),
                 item.get('block', ''),
                 item.get('paragraph', ''),
-                item.get('line', ''),
-                item.get('y', 0)
+                item.get('line', '')
             )
             groups.setdefault(key, []).append(item)
 
