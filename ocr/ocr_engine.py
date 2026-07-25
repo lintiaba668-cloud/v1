@@ -89,7 +89,10 @@ class OCREngine:
                         'x': int(row.get('left', 0)),
                         'y': int(row.get('top', 0)),
                         'w': int(row.get('width', 0)),
-                        'h': int(row.get('height', 0))
+                        'h': int(row.get('height', 0)),
+                        'line': row.get('line_num', ''),
+                        'block': row.get('block_num', ''),
+                        'paragraph': row.get('par_num', '')
                     })
                     texts.append(text)
 
@@ -104,7 +107,6 @@ class OCREngine:
             'top_percent': region
         })
 
-        # PSM 11 对手机拍摄表格、分散标签和跨栏内容明显优于固定整块 PSM 6。
         executor_result = self.executor.execute(str(temp_path), psm=11)
 
         if not executor_result['success']:
@@ -118,7 +120,6 @@ class OCREngine:
         fallback = parse_report_text(raw_text)
         coordinate_fields = pipeline_result.get('fields', {})
 
-        # 文本解析对 PSM 11 的独立行更稳定；坐标提取作为备用。
         fields = {
             'project_name': (
                 fallback.get('project_name')
@@ -180,7 +181,6 @@ class OCREngine:
                     self.executor.cleanup(executor_result)
                     executor_result = None
 
-                # 名称和编号都已获得时无需继续扩大区域。
                 fields = pipeline_result.get('fields', {}) if pipeline_result else {}
                 if fields.get('project_name') and fields.get('project_code'):
                     break
