@@ -2,8 +2,9 @@
 
 """Filename generation rules.
 
-Only handles naming decisions.
-Does not perform OCR or file operations.
+Rules without file extension:
+- start: project_name_project_code_开工
+- completion: project_name_project_code
 """
 
 
@@ -19,19 +20,19 @@ class FilenameRule:
         project_code=""
     ):
         """Generate target filename without extension."""
-
         name = self._normalize_name(project_name)
+        code = self.normalize_code(project_code)
 
-        if not name:
+        if not name or not code:
             return ""
 
+        if report_type == self.REPORT_START:
+            return "%s_%s_开工" % (name, code)
+
         if report_type == self.REPORT_COMPLETION:
-            code = self.normalize_code(project_code)
+            return "%s_%s" % (name, code)
 
-            if code:
-                return "%s_%s" % (name, code)
-
-        return name
+        return ""
 
     def normalize_code(self, code):
         """Keep engineering number characters.
@@ -39,10 +40,9 @@ class FilenameRule:
         Allowed:
         - letters
         - numbers
-        - '-' 
+        - '-'
         - '#'
         """
-
         if not code:
             return ""
 
@@ -59,9 +59,6 @@ class FilenameRule:
             return ""
 
         name = str(value).strip()
-
-        # merge OCR multiline text
         name = name.replace('\n', '')
         name = name.replace('\r', '')
-
         return name
