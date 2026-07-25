@@ -6,6 +6,7 @@ Excel project list -> images/folder/ZIP -> batch OCR -> Excel correction ->
 renamed image output -> result workbook -> manual review when required.
 """
 
+import os
 from pathlib import Path
 import tempfile
 import zipfile
@@ -39,7 +40,7 @@ SUPPORTED_IMAGES = {
 
 class RunnerThread(QThread):
 
-    finished = pyqtSignal(object)
+    completed = pyqtSignal(object)
     failed = pyqtSignal(str)
 
     def __init__(self, runner, files):
@@ -49,7 +50,7 @@ class RunnerThread(QThread):
 
     def run(self):
         try:
-            self.finished.emit(self.runner.run(self.files))
+            self.completed.emit(self.runner.run(self.files))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -216,18 +217,21 @@ class MainWindowV3(QMainWindow):
     def _extract_zip(self, zip_path):
         self.temp_root.mkdir(parents=True, exist_ok=True)
         target = Path(tempfile.mkdtemp(prefix='zip_', dir=str(self.temp_root)))
-        target_root = str(target.resolve()).lower()
+        target_text = str(target.resolve())
 
         with zipfile.ZipFile(str(zip_path), 'r') as archive:
             for info in archive.infolist():
                 destination = (target / info.filename).resolve()
-                destination_text = str(destination).lower()
 
-                if not (
-                    destination_text == target_root
-                    or destination_text.startswith(target_root + str(Path('/')))
-                    or destination_text.startswith(target_root + '\\')
-                ):
+                try:
+                    common = os.path.commonpath([
+                        target_text,
+                        str(destination),
+                    ])
+                except ValueError:
+                    raise ValueError('ZIP包含不安全路径: ' + info.filename)
+
+                if os.path.normcase(common) != os.path.normcase(target_text):
                     raise ValueError('ZIP包含不安全路径: ' + info.filename)
 
                 archive.extract(info, str(target))
@@ -265,7 +269,7 @@ class MainWindowV3(QMainWindow):
         self._append_log('开始处理 {} 个文件。'.format(len(self.files)))
 
         self.thread = RunnerThread(self.runner, self.files)
-        self.thread.finished.connect(self.on_finished)
+        self.thread.completed.connect(self.on_finished)
         self.thread.failed.connect(self.on_failed)
         self.thread.start()
 
