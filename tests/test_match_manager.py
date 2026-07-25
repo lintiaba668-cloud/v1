@@ -41,6 +41,46 @@ def test_exact_project_code_has_highest_priority():
     assert result['score'] == 100.0
 
 
+def test_unique_one_edit_project_code_is_corrected():
+    service = FakeProjectService([
+        {
+            'project_code': 'B1132025Z497',
+            'project_name': '莆田荔城110kV城厢变10kV东江线七步#27箱式变低压线路大修'
+        },
+        {
+            'project_code': '181320260001-1',
+            'project_name': '其他工程'
+        },
+    ])
+    manager = MatchManager(project_service=service)
+
+    result = manager.match_project(
+        ocr_text='',
+        project_code='B11320252497'
+    )
+
+    assert result['status'] == 'matched'
+    assert result['match_source'] == 'project_code_fuzzy'
+    assert result['project_code'] == 'B1132025Z497'
+    assert result['score'] == 98.0
+
+
+def test_ambiguous_fuzzy_code_is_not_auto_accepted():
+    service = FakeProjectService([
+        {'project_code': 'ABC1234567', 'project_name': '工程一'},
+        {'project_code': 'ABC1234568', 'project_name': '工程二'},
+    ])
+    manager = MatchManager(project_service=service)
+
+    result = manager.match_project(
+        ocr_text='',
+        project_code='ABC1234569'
+    )
+
+    assert result['status'] == 'unmatched'
+    assert result['auto_accepted'] is False
+
+
 def test_identical_name_is_automatically_accepted():
     name = '莆田荔城220kV上庄变10kV福岭线#01杆迁改工程'
     service = FakeProjectService([
