@@ -29,11 +29,7 @@ class OCRExecutor:
         self.tessdata = get_resource_path("engine/tessdata")
 
     def execute(self, image_path, psm=11, languages='chi_sim+eng', whitelist=''):
-        """执行一次 OCR。
-
-        PSM 11 适用于手机拍摄表单中的稀疏文字和分散表格字段；保留参数，
-        便于后续对纯单行工程编号使用 PSM 7。
-        """
+        """执行一次OCR；手机拍摄表单默认使用稀疏文本模式PSM 11。"""
         if not self.ocr_exe.exists():
             return self._failed(ErrorCode.ENGINE_MISSING, "OCR engine missing")
 
@@ -116,19 +112,23 @@ class OCRExecutor:
             logger.exception("OCR executor exception")
             return self._failed(ErrorCode.OCR_EXEC_FAILED, str(exc))
 
+    def _remove_temp(self, file_path):
+        if not file_path:
+            return
+
+        path = Path(file_path)
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            logger.warning("cleanup failed: %s", path)
+
     def cleanup(self, result):
         if not result:
             return
 
         for key in ("tsv_file", "temp_file"):
-            file_path = result.get(key)
-            if file_path:
-                path = Path(file_path)
-                try:
-                    if path.exists():
-                        path.unlink()
-                except Exception:
-                    logger.warning("cleanup failed: %s", path)
+            self._remove_temp(result.get(key))
 
     def _failed(self, code, message):
         logger.error("[%s] %s", code, message)
