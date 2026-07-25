@@ -10,6 +10,7 @@ FILES = [
     'main.py',
     'build_win7.spec',
     'requirements.txt',
+    'requirements-win7.txt',
     'engine/tesseract.exe',
     'engine/tessdata/chi_sim.traineddata',
     'engine/tessdata/eng.traineddata',
