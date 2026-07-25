@@ -5,9 +5,15 @@ from core.ocr_rename_service import OCRRenameService
 
 
 class FakePipeline:
-    def __init__(self, project_name='OCR工程', project_code=''):
+    def __init__(
+        self,
+        project_name='OCR工程',
+        project_code='',
+        report_type='start'
+    ):
         self.project_name = project_name
         self.project_code = project_code
+        self.report_type = report_type
 
     def process(self, _image):
         return {
@@ -15,6 +21,7 @@ class FakePipeline:
             'data': {
                 'project_name': self.project_name,
                 'project_code': self.project_code,
+                'report_type': self.report_type,
             },
             'error': '',
         }
@@ -30,7 +37,7 @@ class FakeProjectService:
         return dict(self.result)
 
 
-def test_uncertain_match_does_not_rename_source(tmp_path):
+def test_uncertain_match_does_not_output_file(tmp_path):
     source = tmp_path / 'source.jpg'
     source.write_bytes(b'image')
     output_dir = tmp_path / 'output'
@@ -67,7 +74,7 @@ def test_uncertain_match_does_not_rename_source(tmp_path):
     assert not output_dir.exists()
 
 
-def test_accepted_match_renames_with_standard_project_data(tmp_path):
+def test_completion_report_outputs_name_and_code_and_preserves_source(tmp_path):
     source = tmp_path / 'source.jpg'
     source.write_bytes(b'image')
     output_dir = tmp_path / 'output'
@@ -87,15 +94,46 @@ def test_accepted_match_renames_with_standard_project_data(tmp_path):
     })
 
     service = OCRRenameService(output_dir, project_service=project_service)
-    service.pipeline = FakePipeline('OCR工程', 'P001')
+    service.pipeline = FakePipeline('OCR工程', 'P001', 'finish')
 
     result = service.process(source)
 
     assert result['status'] == 'success'
     assert result['project_name'] == '标准工程一'
     assert result['project_code'] == 'P001'
-    assert not source.exists()
-    assert (output_dir / '标准工程一P001.jpg').exists()
+    assert source.exists()
+    assert (output_dir / '标准工程一_P001.jpg').exists()
+
+
+def test_start_report_outputs_name_only_even_when_excel_has_code(tmp_path):
+    source = tmp_path / 'source.jpg'
+    source.write_bytes(b'image')
+    output_dir = tmp_path / 'output'
+
+    project_service = FakeProjectService({
+        'status': 'matched',
+        'auto_accepted': True,
+        'match_source': 'project_name',
+        'reason': 'score_and_margin_passed',
+        'score': 90.0,
+        'margin': 20.0,
+        'project_code': 'P001',
+        'project_name': '标准工程一',
+        'suggested_project_code': 'P001',
+        'suggested_project_name': '标准工程一',
+        'candidates': [],
+    })
+
+    service = OCRRenameService(output_dir, project_service=project_service)
+    service.pipeline = FakePipeline('OCR工程', '', 'start')
+
+    result = service.process(source)
+
+    assert result['status'] == 'success'
+    assert result['report_type'] == 'start'
+    assert result['filename_project_code'] == ''
+    assert source.exists()
+    assert (output_dir / '标准工程一.jpg').exists()
 
 
 def test_unmatched_result_keeps_original_file(tmp_path):
