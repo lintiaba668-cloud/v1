@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-OCR processing pipeline.
-
-Unified entry point for image recognition workflow.
-"""
+"""Backward-compatible OCR processing pipeline."""
 
 from .engine import OCREngine
 
@@ -46,11 +42,11 @@ class OCRPipeline:
         }
 
         if regions:
-            name_result = self.ocr_engine.recognize(
-                regions.get('name')
+            name_result = self._normalize_result(
+                self.ocr_engine.recognize(regions.get('name'))
             )
-            code_result = self.ocr_engine.recognize(
-                regions.get('code')
+            code_result = self._normalize_result(
+                self.ocr_engine.recognize(regions.get('code'))
             )
 
             name_text = name_result.get('text', '')
@@ -68,3 +64,16 @@ class OCRPipeline:
             )
 
         return result
+
+    @staticmethod
+    def _normalize_result(value):
+        if isinstance(value, dict):
+            return value
+
+        if value is None:
+            return {'text': '', 'confidence': 0}
+
+        return {
+            'text': str(value),
+            'confidence': 0,
+        }
