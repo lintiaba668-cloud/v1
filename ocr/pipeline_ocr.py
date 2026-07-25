@@ -1,6 +1,6 @@
 """
 OCR完整处理链。
-图片 -> Tesseract/TSV -> 工程信息 -> 文件命名模块。
+图片 -> 模板字段OCR -> 多候选工程信息 -> Excel匹配/文件命名。
 """
 
 import traceback
@@ -33,12 +33,17 @@ class OCRPipeline(object):
                 'source': 'field_region_error'
             }
 
-    def _detect_report_type(self, data, text):
+    def _detect_report_type(self, engine_result, data, text):
+        engine_type = engine_result.get('report_type', '')
+        if engine_type in ('start', 'finish'):
+            return engine_type
+
         compact = ''.join(str(text or '').split())
 
         if (
             '开工报告' in compact
             or '我方完成' in compact
+            or '我方完' in compact
             or '项目开工前' in compact
         ):
             return 'start'
@@ -53,26 +58,44 @@ class OCRPipeline(object):
         return ''
 
     def _merge_result(self, engine_result, region_result, parsed_result):
-        """引擎标准字段优先，文本和坐标结果仅作为降级备用。"""
         engine_name = engine_result.get('project_name', '')
         engine_code = engine_result.get('project_code', '')
 
+        name_candidates = list(
+            engine_result.get('project_name_candidates', []) or []
+        )
+        code_candidates = list(
+            engine_result.get('project_code_candidates', []) or []
+        )
+
+        project_name = (
+            engine_name
+            or parsed_result.get('project_name', '')
+            or region_result.get('project_name', '')
+        )
+        project_code = (
+            engine_code
+            or parsed_result.get('project_code', '')
+            or region_result.get('project_code', '')
+        )
+
+        if project_name and project_name not in name_candidates:
+            name_candidates.insert(0, project_name)
+        if project_code and project_code not in code_candidates:
+            code_candidates.insert(0, project_code)
+
         return {
-            'project_name': (
-                engine_name
-                or parsed_result.get('project_name', '')
-                or region_result.get('project_name', '')
+            'project_name': project_name,
+            'project_code': project_code,
+            'project_name_candidates': name_candidates,
+            'project_code_candidates': code_candidates,
+            'source': engine_result.get(
+                'recognition_source',
+                'ocr_engine' if project_name or project_code else region_result.get(
+                    'source', 'text_parser'
+                )
             ),
-            'project_code': (
-                engine_code
-                or parsed_result.get('project_code', '')
-                or region_result.get('project_code', '')
-            ),
-            'source': (
-                'ocr_engine'
-                if engine_name or engine_code
-                else region_result.get('source', 'text_parser')
-            )
+            'rotation_angle': engine_result.get('rotation_angle', 0),
         }
 
     def process(self, image):
@@ -93,13 +116,23 @@ class OCRPipeline(object):
             region_result = self._extract_region_result(items)
             parsed_result = parse_report_text(text)
             data = self._merge_result(result, region_result, parsed_result)
-            data['report_type'] = self._detect_report_type(data, text)
+            data['report_type'] = self._detect_report_type(result, data, text)
 
             error = result.get('error_message', '')
-            valid = bool(data.get('project_name'))
+            report_type = data.get('report_type', '')
+            names = data.get('project_name_candidates', [])
+            codes = data.get('project_code_candidates', [])
+
+            # A non-empty OCR string is no longer sufficient. It must come
+            # from a recognized report template and from the target field.
+            valid = (
+                report_type == 'start' and bool(names)
+            ) or (
+                report_type == 'finish' and bool(names or codes)
+            )
 
             if not valid and not error:
-                error = 'OCR结果无有效工程名称'
+                error = '未从开工/竣工报告目标字段取得有效候选'
 
             return {
                 'text': text,
