@@ -1,8 +1,6 @@
 """
-OCR完整处理链
-图片 -> OCR -> 工程信息 -> 文件命名模块
-
-保持原OCR识别逻辑不变，仅增加统一业务输出字段。
+OCR完整处理链。
+图片 -> Tesseract/TSV -> 工程信息 -> 文件命名模块。
 """
 
 import traceback
@@ -36,25 +34,39 @@ class OCRPipeline(object):
             }
 
     def _detect_report_type(self, data, text):
-        """判断报告类型。
-
-        当前软件只支持两类：
-        start  开工报告
-        finish 竣工验收报告
-        """
-        if data.get('project_code'):
-            return 'finish'
-
-        if '我方完成' in text or '项目开工前' in text:
+        if '开工报告' in text or '我方完成' in text or '项目开工前' in text:
             return 'start'
+
+        if (
+            data.get('project_code')
+            or '竣工验收报告' in text
+            or '实际竣工日期' in text
+        ):
+            return 'finish'
 
         return ''
 
-    def _merge_result(self, region, parsed):
+    def _merge_result(self, engine_result, region_result, parsed_result):
+        """引擎标准字段优先，文本和坐标结果仅作为降级备用。"""
+        engine_name = engine_result.get('project_name', '')
+        engine_code = engine_result.get('project_code', '')
+
         return {
-            'project_name': region.get('project_name') or parsed.get('project_name', ''),
-            'project_code': region.get('project_code') or parsed.get('project_code', ''),
-            'source': region.get('source', 'text_parser')
+            'project_name': (
+                engine_name
+                or parsed_result.get('project_name', '')
+                or region_result.get('project_name', '')
+            ),
+            'project_code': (
+                engine_code
+                or parsed_result.get('project_code', '')
+                or region_result.get('project_code', '')
+            ),
+            'source': (
+                'ocr_engine'
+                if engine_name or engine_code
+                else region_result.get('source', 'text_parser')
+            )
         }
 
     def process(self, image):
@@ -72,19 +84,23 @@ class OCRPipeline(object):
 
             items = result.get('items', [])
             text = result.get('raw_text', '')
-
             region_result = self._extract_region_result(items)
             parsed_result = parse_report_text(text)
-            data = self._merge_result(region_result, parsed_result)
-
+            data = self._merge_result(result, region_result, parsed_result)
             data['report_type'] = self._detect_report_type(data, text)
+
+            error = result.get('error_message', '')
+            valid = bool(data.get('project_name'))
+
+            if not valid and not error:
+                error = 'OCR结果无有效工程名称'
 
             return {
                 'text': text,
                 'data': data,
-                'valid': bool(data.get('project_name')),
+                'valid': valid,
                 'items': items,
-                'error': ''
+                'error': error
             }
 
         except Exception as exc:
