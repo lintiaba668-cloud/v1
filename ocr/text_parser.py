@@ -3,10 +3,11 @@
 工程资料 OCR 文字解析模块。
 
 支持：
-- 配网工程开工报告：提取“我方完成”到“项目开工前”之间的工程名称；
+- 配网工程开工报告：严格提取“我方完成”到“项目开工前”之间内容；
 - 配网工程竣工验收报告：提取工程名称及工程编号；
 - Tesseract PSM 11 稀疏文本输出；
-- 标签漏识别时，按电力工程名称特征进行保守兜底。
+- 标签漏识别时，按电力工程名称特征进行保守兜底；
+- 遇建设/设计/施工/监理单位等字段时停止工程名称拼接。
 
 保持 Python 3.8 / Win7 兼容，不依赖第三方分词组件。
 """
@@ -32,6 +33,26 @@ EXCLUDED_NAME_LINES = (
     '实际竣工日期',
     '计划竣工日期',
     '请审批',
+)
+
+# 这些字段一旦出现，后续内容不再属于工程名称。
+NAME_BOUNDARIES = (
+    '工程编号',
+    '项目编号',
+    '建设单位',
+    '设计单位',
+    '施工单位',
+    '监理单位',
+    '主要工程内容',
+    '主要工程',
+    '工程造价',
+    '开工日期',
+    '竣工日期',
+    '实际竣工日期',
+    '计划竣工日期',
+    '施工',
+    '监理',
+    '单位',
 )
 
 VOLTAGE_PATTERN = re.compile(r'(?:10|35|110|220)\s*[kK][vV]')
@@ -61,7 +82,7 @@ def split_ocr_lines(text):
 
     for raw_line in normalize_ocr_text(text).split('\n'):
         line = re.sub(r'\s+', '', raw_line)
-        line = line.strip('丨|[]【】()（）:：,，。.;；')
+        line = line.strip('丨|[]【】()（）:：,，。.;；“”\'')
 
         if line:
             lines.append(line)
@@ -70,12 +91,15 @@ def split_ocr_lines(text):
 
 
 def extract_open_report_name(text):
-    """提取开工报告中的工程名称。"""
+    """提取开工报告中的工程名称，不允许包含“我方完成”之前内容。"""
     compact = clean_text(text)
 
+    # 手机照片中“我方完成”可能被识别成“我完成”或“方完成”；
+    # “项目”也可能倒序成“目项”。仍坚持从完成锚点之后开始截取。
     patterns = (
-        r'我方完成(.{5,120}?)(?:项目开工前|项目开工的|开工前的)',
-        r'我方完成(.{5,120}?)(?:准备工作|计划于)',
+        r'(?:我方完成|我完成|方完成)(.{5,120}?)'
+        r'(?:项目开工前|目项开工前|项目开工|目项开工|开工前)',
+        r'(?:我方完成|我完成|方完成)(.{5,120}?)(?:准备工作|计划于)',
     )
 
     for pattern in patterns:
@@ -85,7 +109,7 @@ def extract_open_report_name(text):
             if _is_plausible_name(name):
                 return name
 
-    return _fallback_project_name(text)
+    return _fallback_project_name(text, report_type='start')
 
 
 def extract_completion_name(text):
@@ -104,26 +128,39 @@ def extract_completion_name(text):
             if _is_plausible_name(name):
                 return name
 
-    return _fallback_project_name(text)
+    return _fallback_project_name(text, report_type='finish')
 
 
-def _fallback_project_name(text):
-    """标签漏识别时，从前部 OCR 行中选择最像工程名称的内容。"""
+def _fallback_project_name(text, report_type=''):
+    """标签漏识别时，从文档前部选择工程名称候选。"""
     lines = split_ocr_lines(text)
     candidates = []
-
-    # 工程名称位于两类报告的顶部，只检查前部内容，避免正文工程量干扰。
     limit = min(len(lines), 24)
 
     for index in range(limit):
+        joined = ''
+
         for span in (1, 2, 3):
-            joined = ''.join(lines[index:index + span])
-            joined = joined.replace('我方完成', '')
+            next_index = index + span - 1
+            if next_index >= limit:
+                break
 
-            if '项目开工前' in joined:
-                joined = joined.split('项目开工前', 1)[0]
+            next_line = lines[next_index]
 
-            name = _clean_name(joined)
+            # 第一行本身可能含“施工单位”等边界，交由清理函数截断；
+            # 后续行一旦进入单位字段则禁止继续跨行拼接。
+            if span > 1 and _contains_name_boundary(next_line):
+                break
+
+            joined += next_line
+            candidate = joined
+
+            if report_type == 'start':
+                candidate = _extract_after_completion_anchor(candidate)
+                if not candidate:
+                    continue
+
+            name = _clean_name(candidate)
             score = _name_candidate_score(name, index)
 
             if score > 0:
@@ -136,6 +173,43 @@ def _fallback_project_name(text):
     best_score, best_name = candidates[0]
 
     return best_name if best_score >= 45 else ''
+
+
+def _extract_after_completion_anchor(text):
+    """开工报告兜底时也必须丢弃“我方完成”之前的文字。"""
+    compact = clean_text(text)
+    match = re.search(r'(?:我方完成|我完成|方完成)(.+)$', compact)
+
+    if not match:
+        return ''
+
+    value = match.group(1)
+
+    for marker in ('项目开工前', '目项开工前', '项目开工', '目项开工', '开工前'):
+        if marker in value:
+            value = value.split(marker, 1)[0]
+            break
+
+    return value
+
+
+def _contains_name_boundary(text):
+    compact = clean_text(text)
+    return any(word in compact for word in NAME_BOUNDARIES)
+
+
+def _truncate_at_boundary(text):
+    value = text
+    positions = [
+        value.find(word)
+        for word in NAME_BOUNDARIES
+        if value.find(word) >= 0
+    ]
+
+    if positions:
+        value = value[:min(positions)]
+
+    return value
 
 
 def _name_candidate_score(text, line_index):
@@ -167,7 +241,6 @@ def _name_candidate_score(text, line_index):
     if text.endswith('工程'):
         score += 8
 
-    # 越靠近文档顶部越可信。
     score += max(0, 12 - line_index)
 
     chinese_count = len(re.findall(r'[\u4e00-\u9fff]', text))
@@ -204,14 +277,18 @@ def _clean_name(text):
         '项目编号',
         '编号',
         '我方完成',
+        '我完成',
+        '方完成',
     )
 
     for word in remove_words:
         value = value.replace(word, '')
 
+    value = _truncate_at_boundary(value)
+
     # 避免把独立工程编号拼到工程名称尾部。
     value = re.sub(r'[#A-Z0-9][#A-Z0-9\-]{3,22}$', '', value)
-    value = value.strip('：:，,。.;；|丨[]【】()（）')
+    value = value.strip('：:，,。.;；|丨[]【】()（）“”\'')
 
     return value
 
@@ -220,7 +297,9 @@ def extract_project_name(text):
     value = normalize_ocr_text(text)
     compact = clean_text(value)
 
-    if '开工报告' in compact or '我方完成' in compact:
+    if '开工报告' in compact or any(
+        marker in compact for marker in ('我方完成', '我完成', '方完成')
+    ):
         name = extract_open_report_name(value)
         if name:
             return name
@@ -260,7 +339,6 @@ def extract_project_code(text):
             if index + 1 < len(lines):
                 _add_code_candidates(candidates, lines[index + 1], True)
 
-    # 标签漏识别时，只接受较长、数字占比较高的独立编号。
     for line in lines:
         _add_code_candidates(candidates, line, False)
 
