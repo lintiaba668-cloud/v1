@@ -47,6 +47,26 @@ def test_finish_sparse_ocr_without_field_labels():
     assert result.get('project_code') == '1813202400YP04'
 
 
+def test_finish_name_stops_before_construction_unit_from_real_ocr():
+    text = '''
+村 载 建 靖 田 萄 城区 清 前 H6 变 10kv 重 台 区 治理
+| 单位 “| 施工 莆田 市 电力 工程 有 限 公司
+“| 监理 单位 福建 靖 田 疡 源 集 团 有 限 贵 任
+和 网 工程 竣工 验收 报告
+1813202400YP04
+'''
+
+    result = parse_report_text(text)
+    name = result.get('project_name', '')
+
+    assert '10kv' in name.lower()
+    assert '台区治理' in name
+    assert '施工' not in name
+    assert '单位' not in name
+    assert '莆田市电力工程有限公司' not in name
+    assert result.get('project_code') == '1813202400YP04'
+
+
 def test_start_sparse_ocr_multiline_sentence():
     text = '''
 配 网 工程 开工 报告
@@ -61,6 +81,27 @@ def test_start_sparse_ocr_multiline_sentence():
     assert '开闭所' in result.get('project_name', '')
     assert result.get('project_name', '').endswith('治理工程')
     assert result.get('project_code', '') == ''
+
+
+def test_start_name_discards_text_before_completion_anchor_from_real_ocr():
+    text = '''
+察 作 : 前 田 荔 源 勘 设计 有 了
+方 靖 城 我 完成 福建 田 基 区
+边 变 教 俩 开 闭 所 公 10kv 重 台 区 治理 工程
+目 项 开工 前 的 各 项
+， 准备 工作 计 划 于
+号 网 工程 开工 报告
+'''
+
+    result = parse_report_text(text)
+    name = result.get('project_name', '')
+
+    assert name.startswith('福建')
+    assert '开闭所' in name
+    assert name.endswith('治理工程')
+    assert '荔源勘设计' not in name
+    assert '察作' not in name
+    assert '我完成' not in name
 
 
 def test_marked_short_project_code():
