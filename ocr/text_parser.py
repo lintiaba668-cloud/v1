@@ -35,7 +35,6 @@ EXCLUDED_NAME_LINES = (
     '请审批',
 )
 
-# 这些字段一旦出现，后续内容不再属于工程名称。
 NAME_BOUNDARIES = (
     '工程编号',
     '项目编号',
@@ -91,15 +90,14 @@ def split_ocr_lines(text):
 
 
 def extract_open_report_name(text):
-    """提取开工报告中的工程名称，不允许包含“我方完成”之前内容。"""
+    """提取开工报告中的工程名称，不允许包含“完成”之前内容。"""
     compact = clean_text(text)
 
-    # 手机照片中“我方完成”可能被识别成“我完成”或“方完成”；
-    # “项目”也可能倒序成“目项”。仍坚持从完成锚点之后开始截取。
+    # 手机照片中“我方完成”可能丢失最后一个字，或被识别成“我完成/方完成”。
+    anchor = r'(?:我方完成|我方完|我完成|方完成|方完)'
     patterns = (
-        r'(?:我方完成|我完成|方完成)(.{5,120}?)'
-        r'(?:项目开工前|目项开工前|项目开工|目项开工|开工前)',
-        r'(?:我方完成|我完成|方完成)(.{5,120}?)(?:准备工作|计划于)',
+        anchor + r'(.{5,120}?)(?:项目开工前|目项开工前|项目开工|目项开工|开工前)',
+        anchor + r'(.{5,120}?)(?:准备工作|计划于)',
     )
 
     for pattern in patterns:
@@ -147,8 +145,6 @@ def _fallback_project_name(text, report_type=''):
 
             next_line = lines[next_index]
 
-            # 第一行本身可能含“施工单位”等边界，交由清理函数截断；
-            # 后续行一旦进入单位字段则禁止继续跨行拼接。
             if span > 1 and _contains_name_boundary(next_line):
                 break
 
@@ -176,9 +172,12 @@ def _fallback_project_name(text, report_type=''):
 
 
 def _extract_after_completion_anchor(text):
-    """开工报告兜底时也必须丢弃“我方完成”之前的文字。"""
+    """开工报告兜底时也必须丢弃“完成”之前的文字。"""
     compact = clean_text(text)
-    match = re.search(r'(?:我方完成|我完成|方完成)(.+)$', compact)
+    match = re.search(
+        r'(?:我方完成|我方完|我完成|方完成|方完)(.+)$',
+        compact,
+    )
 
     if not match:
         return ''
@@ -277,20 +276,25 @@ def _clean_name(text):
         '项目编号',
         '编号',
         '我方完成',
+        '我方完',
         '我完成',
         '方完成',
+        '方完',
     )
 
     for word in remove_words:
         value = value.replace(word, '')
 
     value = _truncate_at_boundary(value)
-
-    # 避免把独立工程编号拼到工程名称尾部。
     value = re.sub(r'[#A-Z0-9][#A-Z0-9\-]{3,22}$', '', value)
     value = value.strip('：:，,。.;；|丨[]【】()（）“”\'')
 
     return value
+
+
+def clean_project_name_candidate(text):
+    """Public field-cleaning API used by template OCR and legacy callers."""
+    return _clean_name(text)
 
 
 def extract_project_name(text):
@@ -298,7 +302,8 @@ def extract_project_name(text):
     compact = clean_text(value)
 
     if '开工报告' in compact or any(
-        marker in compact for marker in ('我方完成', '我完成', '方完成')
+        marker in compact
+        for marker in ('我方完成', '我方完', '我完成', '方完成', '方完')
     ):
         name = extract_open_report_name(value)
         if name:
