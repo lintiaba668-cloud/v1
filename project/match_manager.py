@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-Project detail matching manager.
+"""Project detail matching manager.
 
 Workflow:
-OCR result -> correction -> imported project library -> ranked candidates ->
+OCR result -> imported project library -> ranked candidates ->
 auditable automatic/review decision.
 """
 
@@ -18,8 +17,8 @@ class MatchManager:
         project_service=None,
         correction=None,
         strategy=None,
-        matched_threshold=82,
-        uncertain_threshold=65,
+        matched_threshold=76,
+        uncertain_threshold=58,
         min_margin=8,
         candidate_limit=3
     ):
@@ -44,7 +43,6 @@ class MatchManager:
 
     def match_project(self, ocr_text='', project_code=''):
         """Match one OCR result against the imported project library."""
-
         if not self.project_service:
             return self._empty_result('project_service_unavailable')
 
@@ -126,7 +124,6 @@ class MatchManager:
 
     def batch_match(self, ocr_results):
         """Match strings or OCR-result dictionaries while preserving order."""
-
         results = []
 
         for index, item in enumerate(ocr_results):
