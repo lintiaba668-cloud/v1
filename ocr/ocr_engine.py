@@ -1,6 +1,13 @@
 """
 OCR识别引擎接口。
-Win7兼容版：程序目录内 Tesseract + TSV 坐标解析。
+
+Primary path:
+- automatic 0/90/180/270 orientation selection;
+- template-specific project-name/project-code crops;
+- multiple field OCR candidates for Excel matching.
+
+Fallback path:
+- legacy adaptive top-region OCR for unknown templates.
 """
 
 from pathlib import Path
@@ -17,6 +24,7 @@ from .document_detector import DocumentDetector
 from .field_pipeline import FieldPipeline
 from .adaptive_region import AdaptiveOCRRegion
 from .ocr_scorer import OCRScorer
+from .template_field_recognizer import TemplateFieldRecognizer
 from core.resource import get_resource_path
 from core.error_code import ErrorCode
 from core.status import OCRStatus
@@ -43,6 +51,7 @@ class OCREngine:
         self.orientation = OrientationDetector(self.ocr_exe)
         self.document_detector = DocumentDetector()
         self.field_pipeline = FieldPipeline()
+        self.template_recognizer = TemplateFieldRecognizer(self.executor)
 
         self.status = OCRStatus.CHECKING
         self._validate_engine()
@@ -81,19 +90,31 @@ class OCREngine:
             reader = csv.DictReader(file, delimiter='\t')
             for row in reader:
                 text = row.get('text', '').strip()
-                conf = row.get('conf', '-1')
-                if text and conf != '-1':
-                    items.append({
-                        'text': text,
-                        'x': int(row.get('left', 0)),
-                        'y': int(row.get('top', 0)),
-                        'w': int(row.get('width', 0)),
-                        'h': int(row.get('height', 0)),
-                        'page': row.get('page_num', ''),
-                        'block': row.get('block_num', ''),
-                        'paragraph': row.get('par_num', ''),
-                        'line': row.get('line_num', '')
-                    })
+                confidence = row.get('conf', '-1')
+
+                if not text or confidence == '-1':
+                    continue
+
+                try:
+                    confidence_value = float(confidence)
+                except Exception:
+                    confidence_value = -1.0
+
+                if confidence_value < 0:
+                    continue
+
+                items.append({
+                    'text': text,
+                    'confidence': confidence_value,
+                    'x': int(row.get('left', 0)),
+                    'y': int(row.get('top', 0)),
+                    'w': int(row.get('width', 0)),
+                    'h': int(row.get('height', 0)),
+                    'page': row.get('page_num', ''),
+                    'block': row.get('block_num', ''),
+                    'paragraph': row.get('par_num', ''),
+                    'line': row.get('line_num', '')
+                })
 
         logger.info('[OCR_DATA] box_count=%s', len(items))
         return {
@@ -103,7 +124,6 @@ class OCREngine:
 
     @staticmethod
     def _rebuild_native_text(items):
-        """按 Tesseract TSV 原生 block/paragraph/line 重建文本。"""
         groups = {}
 
         for item in items:
@@ -144,7 +164,11 @@ class OCREngine:
             'top_percent': region
         })
 
-        executor_result = self.executor.execute(str(temp_path), psm=11)
+        executor_result = self.executor.execute(
+            str(temp_path),
+            psm=11,
+            oem=1,
+        )
 
         if not executor_result['success']:
             return None, executor_result
@@ -180,8 +204,6 @@ class OCREngine:
 
     def recognize(self, image_path):
         image_path = Path(image_path)
-        executor_result = None
-        temp_path = None
 
         if not self.enabled:
             return OCRResult(
@@ -198,6 +220,55 @@ class OCREngine:
                 error_code=ErrorCode.IMAGE_PREPROCESS_FAILED,
                 error_message='图片文件不存在: ' + str(image_path)
             ).to_dict()
+
+        try:
+            template = self.template_recognizer.recognize(image_path)
+            report_type = template.get('report_type', '')
+            name_candidates = template.get('project_name_candidates', [])
+            code_candidates = template.get('project_code_candidates', [])
+
+            template_valid = (
+                report_type == 'start' and bool(name_candidates)
+            ) or (
+                report_type == 'finish'
+                and bool(name_candidates or code_candidates)
+            )
+
+            if template_valid:
+                logger.info(
+                    '[TEMPLATE_OCR] type=%s angle=%s names=%s codes=%s',
+                    report_type,
+                    template.get('rotation_angle', 0),
+                    len(name_candidates),
+                    len(code_candidates),
+                )
+                return OCRResult(
+                    image=str(image_path),
+                    raw_text=template.get('raw_text', ''),
+                    items=template.get('items', []),
+                    project_name=template.get('project_name', ''),
+                    project_code=template.get('project_code', ''),
+                    project_name_candidates=name_candidates,
+                    project_code_candidates=code_candidates,
+                    report_type=report_type,
+                    rotation_angle=template.get('rotation_angle', 0),
+                    recognition_source=template.get(
+                        'recognition_source', 'template_fields'
+                    ),
+                    status=OCRStatus.FINISHED,
+                    error_code=ErrorCode.SUCCESS,
+                ).to_dict()
+
+            logger.info('[TEMPLATE_OCR] no reliable fields; legacy fallback')
+
+        except Exception:
+            logger.exception('[TEMPLATE_OCR] failed; legacy fallback')
+
+        return self._recognize_legacy(image_path)
+
+    def _recognize_legacy(self, image_path):
+        executor_result = None
+        temp_path = None
 
         try:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
@@ -234,13 +305,26 @@ class OCREngine:
 
             fields = best.get('fields', {})
             text = best.get('raw_text', '') or best.get('layout_text', '')
+            parsed = parse_report_text(text)
+            name = fields.get('project_name', '')
+            code = fields.get('project_code', '')
 
             return OCRResult(
                 image=str(image_path),
                 raw_text=text,
                 items=best.get('items', []),
-                project_name=fields.get('project_name', ''),
-                project_code=fields.get('project_code', ''),
+                project_name=name,
+                project_code=code,
+                project_name_candidates=[name] if name else [],
+                project_code_candidates=[code] if code else [],
+                report_type=(
+                    'finish'
+                    if code or '竣工验收报告' in ''.join(text.split())
+                    else 'start'
+                    if '开工报告' in ''.join(text.split())
+                    else ''
+                ),
+                recognition_source='legacy_region',
                 status=OCRStatus.FINISHED,
                 error_code=ErrorCode.SUCCESS
             ).to_dict()
