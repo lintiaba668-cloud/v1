@@ -1,6 +1,6 @@
 """
-OCR识别引擎接口
-Win7兼容版：程序目录内OCR + TSV坐标解析
+OCR识别引擎接口。
+Win7兼容版：程序目录内 Tesseract + TSV 坐标解析。
 """
 
 from pathlib import Path
@@ -51,7 +51,7 @@ class OCREngine:
             self.status = OCRStatus.READY
 
     def _load_ocr_region(self):
-        default = {'enabled': True, 'top_percent': 25}
+        default = {'enabled': True, 'top_percent': 28}
         config_path = get_resource_path('config.json')
         try:
             if config_path.exists():
@@ -104,28 +104,60 @@ class OCREngine:
             'top_percent': region
         })
 
-        executor_result = self.executor.execute(str(temp_path))
+        # PSM 11 对手机拍摄表格、分散标签和跨栏内容明显优于固定整块 PSM 6。
+        executor_result = self.executor.execute(str(temp_path), psm=11)
 
         if not executor_result['success']:
             return None, executor_result
 
         parsed = self._parse_tsv(executor_result['tsv_file'])
         pipeline_result = self.field_pipeline.process(parsed['items'])
-        fields = pipeline_result.get('fields', {})
 
-        pipeline_result['score'] = self.scorer.score(
-            fields,
-            pipeline_result.get('layout_text', '')
-        )
+        layout_text = pipeline_result.get('layout_text', '')
+        raw_text = layout_text or parsed.get('raw_text', '')
+        fallback = parse_report_text(raw_text)
+        coordinate_fields = pipeline_result.get('fields', {})
 
-        logger.info('[OCR_SCORE] %s', pipeline_result['score'])
+        # 文本解析对 PSM 11 的独立行更稳定；坐标提取作为备用。
+        fields = {
+            'project_name': (
+                fallback.get('project_name')
+                or coordinate_fields.get('project_name', '')
+            ),
+            'project_code': (
+                fallback.get('project_code')
+                or coordinate_fields.get('project_code', '')
+            )
+        }
 
+        pipeline_result['fields'] = fields
+        pipeline_result['items'] = parsed['items']
+        pipeline_result['raw_text'] = raw_text
+        pipeline_result['score'] = self.scorer.score(fields, raw_text)
+
+        logger.info('[OCR_SCORE] %s fields=%s', pipeline_result['score'], fields)
         return pipeline_result, executor_result
 
     def recognize(self, image_path):
         image_path = Path(image_path)
         executor_result = None
         temp_path = None
+
+        if not self.enabled:
+            return OCRResult(
+                image=str(image_path),
+                status=OCRStatus.FAILED,
+                error_code=self.error_code,
+                error_message=self.last_error
+            ).to_dict()
+
+        if not image_path.is_file():
+            return OCRResult(
+                image=str(image_path),
+                status=OCRStatus.FAILED,
+                error_code=ErrorCode.IMAGE_PREPROCESS_FAILED,
+                error_message='图片文件不存在: ' + str(image_path)
+            ).to_dict()
 
         try:
             with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp:
@@ -148,6 +180,11 @@ class OCREngine:
                     self.executor.cleanup(executor_result)
                     executor_result = None
 
+                # 名称和编号都已获得时无需继续扩大区域。
+                fields = pipeline_result.get('fields', {}) if pipeline_result else {}
+                if fields.get('project_name') and fields.get('project_code'):
+                    break
+
             if not best:
                 return OCRResult(
                     image=str(image_path),
@@ -157,13 +194,14 @@ class OCREngine:
                 ).to_dict()
 
             fields = best.get('fields', {})
-            fallback = parse_report_text(best['layout_text'])
+            text = best.get('raw_text', '') or best.get('layout_text', '')
 
             return OCRResult(
                 image=str(image_path),
-                raw_text=best['layout_text'],
-                project_name=fields.get('project_name') or fallback.get('project_name', ''),
-                project_code=fields.get('project_code') or fallback.get('project_code', ''),
+                raw_text=text,
+                items=best.get('items', []),
+                project_name=fields.get('project_name', ''),
+                project_code=fields.get('project_code', ''),
                 status=OCRStatus.FINISHED,
                 error_code=ErrorCode.SUCCESS
             ).to_dict()
