@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Domain matching strategy for imported power-project details.
+"""Imported power-project matching strategy.
 
-The strategy combines generic text similarity with power-industry fields and
-returns a score breakdown so automatic decisions remain auditable.
+OCR名称允许存在少量错字；Excel项目明细是最终标准数据源。
+评分按目标项目实际具备的字段动态归一，避免台区类项目因没有线路号、杆号而
+永远达不到自动匹配阈值。
 """
 
 import re
@@ -16,11 +16,12 @@ class PowerProjectMatchStrategy:
     """Score one OCR project name against one imported project name."""
 
     WEIGHTS = {
-        'text_similarity': 35,
-        'line': 25,
-        'substation': 15,
-        'pole': 15,
-        'voltage': 10,
+        'text_similarity': 60,
+        'line': 15,
+        'substation': 8,
+        'pole': 7,
+        'voltage': 5,
+        'keywords': 5,
     }
 
     PENALTIES = {
@@ -28,7 +29,13 @@ class PowerProjectMatchStrategy:
         'substation_conflict': 15,
         'pole_conflict': 30,
         'voltage_conflict': 20,
+        'keywords_conflict': 10,
     }
+
+    POWER_KEYWORDS = (
+        '台区', '治理', '开闭所', '公变', '重载', '改造',
+        '迁改', '新建', '配套', '业扩', '增容', '线路',
+    )
 
     def __init__(self, normalizer=None):
         self.normalizer = normalizer or ProjectNormalizer()
@@ -78,14 +85,35 @@ class PowerProjectMatchStrategy:
                 self.WEIGHTS['voltage'],
                 self.PENALTIES['voltage_conflict']
             ),
+            'keywords': self._field_score(
+                source_fields['keywords'],
+                target_fields['keywords'],
+                self.WEIGHTS['keywords'],
+                self.PENALTIES['keywords_conflict']
+            ),
         }
 
+        available_weight = self.WEIGHTS['text_similarity']
+        field_weights = (
+            ('lines', 'line'),
+            ('substations', 'substation'),
+            ('poles', 'pole'),
+            ('voltages', 'voltage'),
+            ('keywords', 'keywords'),
+        )
+
+        for field_name, weight_name in field_weights:
+            if target_fields[field_name]:
+                available_weight += self.WEIGHTS[weight_name]
+
         raw_score = sum(breakdown.values())
-        total = max(0.0, min(100.0, raw_score))
+        normalized_score = raw_score * 100.0 / float(max(1, available_weight))
+        total = max(0.0, min(100.0, normalized_score))
 
         return {
             'score': round(total, 2),
             'breakdown': breakdown,
+            'available_weight': available_weight,
             'source_normalized': source_normalized,
             'target_normalized': target_normalized,
             'source_fields': source_fields,
@@ -93,13 +121,12 @@ class PowerProjectMatchStrategy:
         }
 
     def extract_fields(self, text):
-        """Extract stable power-project tokens from normalized text."""
-
         return {
             'voltages': self._extract_voltages(text),
             'lines': self._extract_named_suffixes(text, '线', 20),
             'substations': self._extract_substations(text),
             'poles': self._extract_poles(text),
+            'keywords': self._extract_keywords(text),
         }
 
     def _extract_voltages(self, text):
@@ -136,7 +163,6 @@ class PowerProjectMatchStrategy:
         result = []
 
         for value in candidates:
-            # Exclude numbered distribution transformers such as #4变.
             if re.match(r'^#?\d+变$', value):
                 continue
             result.append(value)
@@ -147,11 +173,21 @@ class PowerProjectMatchStrategy:
         values = re.findall(r'#?0*(\d{1,5})(?:号)?杆', text)
         return sorted(set(str(int(value)) for value in values))
 
+    def _extract_keywords(self, text):
+        return sorted(set(
+            keyword
+            for keyword in self.POWER_KEYWORDS
+            if keyword in text
+        ))
+
     def _field_score(self, source_values, target_values, reward, penalty):
         source_set = set(source_values)
         target_set = set(target_values)
 
-        if not source_set or not target_set:
+        if not target_set:
+            return 0
+
+        if not source_set:
             return 0
 
         if source_set & target_set:
@@ -168,7 +204,9 @@ class PowerProjectMatchStrategy:
                 'substation': 0,
                 'pole': 0,
                 'voltage': 0,
+                'keywords': 0,
             },
+            'available_weight': self.WEIGHTS['text_similarity'],
             'source_normalized': source_normalized,
             'target_normalized': target_normalized,
             'source_fields': self.extract_fields(source_normalized),
