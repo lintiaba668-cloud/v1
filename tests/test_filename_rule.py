@@ -10,10 +10,22 @@ def test_start_report_filename():
 
     name = rule.build_filename(
         FilenameRule.REPORT_START,
+        "测试工程",
+        "ABC123-01"
+    )
+
+    assert name == "测试工程_ABC123-01_开工"
+
+
+def test_start_report_requires_project_code():
+    rule = FilenameRule()
+
+    name = rule.build_filename(
+        FilenameRule.REPORT_START,
         "测试工程"
     )
 
-    assert name == "测试工程"
+    assert name == ""
 
 
 def test_completion_report_filename():
@@ -57,7 +69,8 @@ def test_multiline_project_name():
 
     name = rule.build_filename(
         FilenameRule.REPORT_START,
-        "110kV变电站\n扩建工程"
+        "110kV变电站\n扩建工程",
+        "P001"
     )
 
-    assert name == "110kV变电站扩建工程"
+    assert name == "110kV变电站扩建工程_P001_开工"
