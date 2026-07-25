@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 
-"""Tesseract OCR执行层.
+"""Tesseract OCR执行层。
 
 负责：
-- tesseract调用
-- TSV坐标输出
-- 超时处理
-- 错误处理
-- 临时文件生命周期
+- tesseract调用；
+- TSV坐标输出；
+- 超时及错误处理；
+- 临时文件生命周期。
 """
 
 import logging
@@ -29,7 +28,12 @@ class OCRExecutor:
         self.ocr_exe = get_resource_path("engine/tesseract.exe")
         self.tessdata = get_resource_path("engine/tessdata")
 
-    def execute(self, image_path):
+    def execute(self, image_path, psm=11, languages='chi_sim+eng', whitelist=''):
+        """执行一次 OCR。
+
+        PSM 11 适用于手机拍摄表单中的稀疏文字和分散表格字段；保留参数，
+        便于后续对纯单行工程编号使用 PSM 7。
+        """
         if not self.ocr_exe.exists():
             return self._failed(ErrorCode.ENGINE_MISSING, "OCR engine missing")
 
@@ -47,11 +51,18 @@ class OCRExecutor:
                 str(image_path),
                 output_base,
                 "--psm",
-                "6",
+                str(psm),
                 "-l",
-                "chi_sim+eng",
-                "tsv"
+                str(languages),
             ]
+
+            if whitelist:
+                command.extend([
+                    '-c',
+                    'tessedit_char_whitelist=' + str(whitelist),
+                ])
+
+            command.append("tsv")
 
             logger.info('[OCR] execute image=%s', image_path)
             logger.info('[OCR_CMD] %s', ' '.join(command))
@@ -76,7 +87,6 @@ class OCRExecutor:
                 )
 
             tsv_path = Path(output_base + ".tsv")
-
             size = tsv_path.stat().st_size if tsv_path.exists() else 0
 
             logger.info(
@@ -85,6 +95,12 @@ class OCRExecutor:
                 tsv_path.exists(),
                 size
             )
+
+            if not tsv_path.exists() or size <= 0:
+                return self._failed(
+                    ErrorCode.OCR_EXEC_FAILED,
+                    'Tesseract did not create TSV output'
+                )
 
             return {
                 "success": True,
