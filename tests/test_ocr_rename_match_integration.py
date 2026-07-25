@@ -101,11 +101,12 @@ def test_completion_report_outputs_name_and_code_and_preserves_source(tmp_path):
     assert result['status'] == 'success'
     assert result['project_name'] == '标准工程一'
     assert result['project_code'] == 'P001'
+    assert result['filename_tag'] == ''
     assert source.exists()
     assert (output_dir / '标准工程一_P001.jpg').exists()
 
 
-def test_start_report_outputs_name_only_even_when_excel_has_code(tmp_path):
+def test_start_report_uses_excel_code_and_start_suffix(tmp_path):
     source = tmp_path / 'source.jpg'
     source.write_bytes(b'image')
     output_dir = tmp_path / 'output'
@@ -117,9 +118,9 @@ def test_start_report_outputs_name_only_even_when_excel_has_code(tmp_path):
         'reason': 'score_and_margin_passed',
         'score': 90.0,
         'margin': 20.0,
-        'project_code': 'P001',
+        'project_code': '1813202400START',
         'project_name': '标准工程一',
-        'suggested_project_code': 'P001',
+        'suggested_project_code': '1813202400START',
         'suggested_project_name': '标准工程一',
         'candidates': [],
     })
@@ -131,9 +132,44 @@ def test_start_report_outputs_name_only_even_when_excel_has_code(tmp_path):
 
     assert result['status'] == 'success'
     assert result['report_type'] == 'start'
-    assert result['filename_project_code'] == ''
+    assert result['project_code'] == '1813202400START'
+    assert result['filename_project_code'] == '1813202400START'
+    assert result['filename_tag'] == '开工'
     assert source.exists()
-    assert (output_dir / '标准工程一.jpg').exists()
+    assert (
+        output_dir / '标准工程一_1813202400START_开工.jpg'
+    ).exists()
+
+
+def test_matched_project_without_code_is_rejected(tmp_path):
+    source = tmp_path / 'source.jpg'
+    source.write_bytes(b'image')
+
+    project_service = FakeProjectService({
+        'status': 'matched',
+        'auto_accepted': True,
+        'match_source': 'project_name',
+        'reason': 'score_and_margin_passed',
+        'score': 90.0,
+        'margin': 20.0,
+        'project_code': '',
+        'project_name': '标准工程一',
+        'suggested_project_code': '',
+        'suggested_project_name': '标准工程一',
+        'candidates': [],
+    })
+
+    service = OCRRenameService(
+        tmp_path / 'output',
+        project_service=project_service
+    )
+    service.pipeline = FakePipeline('OCR工程', '', 'start')
+
+    result = service.process(source)
+
+    assert result['status'] == 'failed'
+    assert '缺少工程编号' in result['error']
+    assert source.exists()
 
 
 def test_unmatched_result_keeps_original_file(tmp_path):
