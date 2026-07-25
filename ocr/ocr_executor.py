@@ -28,8 +28,15 @@ class OCRExecutor:
         self.ocr_exe = get_resource_path("engine/tesseract.exe")
         self.tessdata = get_resource_path("engine/tessdata")
 
-    def execute(self, image_path, psm=11, languages='chi_sim+eng', whitelist=''):
-        """执行一次OCR；手机拍摄表单默认使用稀疏文本模式PSM 11。"""
+    def execute(
+        self,
+        image_path,
+        psm=11,
+        languages='chi_sim+eng',
+        whitelist='',
+        oem=1,
+    ):
+        """执行一次OCR；默认强制使用LSTM引擎，兼容best/fast模型。"""
         if not self.ocr_exe.exists():
             return self._failed(ErrorCode.ENGINE_MISSING, "OCR engine missing")
 
@@ -46,6 +53,8 @@ class OCRExecutor:
                 str(self.ocr_exe),
                 str(image_path),
                 output_base,
+                "--oem",
+                str(oem),
                 "--psm",
                 str(psm),
                 "-l",
