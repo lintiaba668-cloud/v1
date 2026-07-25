@@ -1,9 +1,5 @@
-"""
-OCR识别到自动命名服务。
+"""OCR recognition to standard project matching and file output service."""
 
-只有导入项目明细匹配结果达到自动通过条件时才执行重命名；
-候选过近或低置信度结果进入人工复核状态，避免误改文件名。
-"""
 from pathlib import Path
 
 from ocr.pipeline_ocr import OCRPipeline
@@ -29,12 +25,14 @@ class OCRRenameService:
                 'error': result.get('error', 'OCR结果无有效工程名称'),
                 'ocr_project_name': '',
                 'ocr_project_code': '',
+                'report_type': '',
                 'matched': False,
             }
 
         data = result.get('data', {})
         ocr_project_name = data.get('project_name', '')
         ocr_project_code = data.get('project_code', '')
+        report_type = data.get('report_type', '')
 
         match = self.project_service.match_project(
             project_name=ocr_project_name,
@@ -53,6 +51,7 @@ class OCRRenameService:
                 'target': '',
                 'ocr_project_name': ocr_project_name,
                 'ocr_project_code': ocr_project_code,
+                'report_type': report_type,
                 'project_name': '',
                 'project_code': '',
                 'suggested_project_name': match.get(
@@ -80,6 +79,7 @@ class OCRRenameService:
                 'error': '匹配结果缺少标准工程名称',
                 'ocr_project_name': ocr_project_name,
                 'ocr_project_code': ocr_project_code,
+                'report_type': report_type,
                 'matched': False,
             }
 
@@ -87,17 +87,13 @@ class OCRRenameService:
             image_path=image_path,
             project_name=project_name,
             project_code=project_code,
+            report_type=report_type,
             original=result,
             match=match,
             manual_confirmed=False
         )
 
     def confirm_review(self, review_result, selected_project_code):
-        """Confirm one review item and rename with an imported project.
-
-        The selected project must exist in the imported project library. This
-        prevents free-text edits from bypassing the authoritative project list.
-        """
         item = dict(review_result or {})
         status = item.get('status', '')
 
@@ -123,6 +119,7 @@ class OCRRenameService:
             image_path=source,
             project_name=project.get('project_name', ''),
             project_code=project.get('project_code', ''),
+            report_type=item.get('report_type', ''),
             original=item,
             match={
                 'match_source': 'manual_review',
@@ -139,6 +136,7 @@ class OCRRenameService:
         image_path,
         project_name,
         project_code,
+        report_type,
         original,
         match,
         manual_confirmed
@@ -146,17 +144,26 @@ class OCRRenameService:
         if not project_name:
             return self._review_error(original, '标准工程名称为空')
 
+        resolved_type = self._resolve_report_type(
+            report_type,
+            original
+        )
+
+        # 开工报告即使从Excel匹配到工程编号，文件名也只使用工程名称。
+        filename_code = project_code if resolved_type == 'finish' else ''
+
         target = rename_file(
             image_path,
             self.output_dir,
             project_name,
-            project_code
+            filename_code
         )
 
         return {
             'status': 'success',
             'source': str(image_path),
             'target': str(target),
+            'report_type': resolved_type,
             'ocr_project_name': original.get(
                 'ocr_project_name',
                 original.get('data', {}).get('project_name', '')
@@ -169,6 +176,7 @@ class OCRRenameService:
             ),
             'project_name': project_name,
             'project_code': project_code,
+            'filename_project_code': filename_code,
             'matched': True,
             'manual_confirmed': bool(manual_confirmed),
             'match_source': match.get('match_source', ''),
@@ -178,12 +186,25 @@ class OCRRenameService:
             'candidates': match.get('candidates', []),
         }
 
+    def _resolve_report_type(self, report_type, original):
+        if report_type in ('start', 'finish'):
+            return report_type
+
+        data = original.get('data', {}) if isinstance(original, dict) else {}
+        ocr_code = (
+            original.get('ocr_project_code', '')
+            if isinstance(original, dict) else ''
+        ) or (data.get('project_code', '') if isinstance(data, dict) else '')
+
+        return 'finish' if ocr_code else 'start'
+
     def _review_error(self, item, message):
         return {
             'status': 'failed',
             'source': item.get('source', ''),
             'target': item.get('target', ''),
             'error': message,
+            'report_type': item.get('report_type', ''),
             'ocr_project_name': item.get('ocr_project_name', ''),
             'ocr_project_code': item.get('ocr_project_code', ''),
             'project_name': '',
