@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-Project service layer.
+"""Project service layer."""
 
-Provides unified project library operations for GUI and business logic.
-"""
+from core.resource import get_resource_path
 
 from .database import ProjectDatabase
 from .import_manager import ProjectImportManager
@@ -13,7 +11,10 @@ from .match_manager import MatchManager
 
 class ProjectService:
 
-    def __init__(self, db_path='data/projects.db'):
+    def __init__(self, db_path=None):
+        if db_path is None:
+            db_path = get_resource_path('data/projects.db')
+
         self.db = ProjectDatabase(db_path)
         self.import_manager = ProjectImportManager(db_path)
         self.backup_tool = ProjectBackup()
@@ -33,7 +34,6 @@ class ProjectService:
 
     def match_project(self, project_name='', project_code=''):
         """Match one OCR result against imported project details."""
-
         return self.match_manager.match_project(
             ocr_text=project_name,
             project_code=project_code
@@ -41,7 +41,6 @@ class ProjectService:
 
     def batch_match_projects(self, ocr_results):
         """Match a batch of OCR results while preserving input order."""
-
         return self.match_manager.batch_match(ocr_results)
 
     def backup(self, target_path):
