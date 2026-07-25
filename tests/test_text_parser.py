@@ -49,10 +49,10 @@ def test_finish_sparse_ocr_without_field_labels():
 
 def test_start_sparse_ocr_multiline_sentence():
     text = '''
-配网工程开工报告
-我方完成 福建靖田荔城区
+配 网 工程 开工 报告
+我 方 完 成 福建靖田荔城区
 疯边开闭所公恋10kv重载台区治理工程
-项目开工前的各项
+项目 开工 前的 各项
 准备工作，计划于2025.6.12开工，请审批
 '''
 
@@ -61,6 +61,16 @@ def test_start_sparse_ocr_multiline_sentence():
     assert '开闭所' in result.get('project_name', '')
     assert result.get('project_name', '').endswith('治理工程')
     assert result.get('project_code', '') == ''
+
+
+def test_marked_short_project_code():
+    text = '''工程名称
+10kV某线路迁改工程
+工程编号
+#035B'''
+
+    result = parse_report_text(text)
+    assert result.get('project_code') == '#035B'
 
 
 def test_latin_noise_is_not_project_code():
