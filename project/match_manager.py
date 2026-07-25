@@ -10,7 +10,7 @@ from .match_strategy import PowerProjectMatchStrategy
 
 
 class MatchManager:
-    """Coordinate exact-code and power-project-name matching."""
+    """Coordinate exact/fuzzy-code and power-project-name matching."""
 
     def __init__(
         self,
@@ -51,19 +51,21 @@ class MatchManager:
         if code:
             exact = self.project_service.find_by_code(code)
             if exact:
-                return {
-                    'status': 'matched',
-                    'auto_accepted': True,
-                    'match_source': 'project_code',
-                    'reason': 'exact_project_code',
-                    'score': 100.0,
-                    'margin': 100.0,
-                    'project_code': exact.get('project_code', ''),
-                    'project_name': exact.get('project_name', ''),
-                    'suggested_project_code': exact.get('project_code', ''),
-                    'suggested_project_name': exact.get('project_name', ''),
-                    'candidates': [],
-                }
+                return self._code_result(
+                    exact,
+                    source='project_code',
+                    reason='exact_project_code',
+                    score=100.0,
+                )
+
+            fuzzy = self._find_unique_fuzzy_code(code)
+            if fuzzy:
+                return self._code_result(
+                    fuzzy,
+                    source='project_code_fuzzy',
+                    reason='unique_one_edit_project_code',
+                    score=98.0,
+                )
 
         text = self.normalize_text(ocr_text)
         if not text:
@@ -123,7 +125,6 @@ class MatchManager:
         }
 
     def batch_match(self, ocr_results):
-        """Match strings or OCR-result dictionaries while preserving order."""
         results = []
 
         for index, item in enumerate(ocr_results):
@@ -149,6 +150,85 @@ class MatchManager:
             results.append(matched)
 
         return results
+
+    def _find_unique_fuzzy_code(self, code):
+        projects = self.project_service.list_projects()
+        ranked = []
+
+        for project in projects:
+            standard = self._normalize_code(project.get('project_code', ''))
+            if not standard:
+                continue
+
+            # Short codes are too ambiguous for automatic fuzzy correction.
+            if min(len(code), len(standard)) < 8:
+                continue
+
+            distance = self._levenshtein(code, standard, stop_after=1)
+            if distance <= 1:
+                ranked.append((distance, standard, project))
+
+        if not ranked:
+            return None
+
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        best_distance = ranked[0][0]
+        best = [item for item in ranked if item[0] == best_distance]
+
+        # Fuzzy code matching is accepted only when the nearest imported code
+        # is unique. Otherwise the result must be resolved by name/review.
+        if len(best) != 1:
+            return None
+
+        return best[0][2]
+
+    @staticmethod
+    def _levenshtein(source, target, stop_after=None):
+        if source == target:
+            return 0
+
+        if stop_after is not None and abs(len(source) - len(target)) > stop_after:
+            return stop_after + 1
+
+        previous = list(range(len(target) + 1))
+
+        for source_index, source_char in enumerate(source, 1):
+            current = [source_index]
+            row_minimum = current[0]
+
+            for target_index, target_char in enumerate(target, 1):
+                value = min(
+                    current[-1] + 1,
+                    previous[target_index] + 1,
+                    previous[target_index - 1] + (
+                        0 if source_char == target_char else 1
+                    ),
+                )
+                current.append(value)
+                row_minimum = min(row_minimum, value)
+
+            if stop_after is not None and row_minimum > stop_after:
+                return stop_after + 1
+
+            previous = current
+
+        return previous[-1]
+
+    @staticmethod
+    def _code_result(project, source, reason, score):
+        return {
+            'status': 'matched',
+            'auto_accepted': True,
+            'match_source': source,
+            'reason': reason,
+            'score': float(score),
+            'margin': 100.0,
+            'project_code': project.get('project_code', ''),
+            'project_name': project.get('project_name', ''),
+            'suggested_project_code': project.get('project_code', ''),
+            'suggested_project_name': project.get('project_name', ''),
+            'candidates': [],
+        }
 
     def _decide_status(self, score, margin, candidate_count):
         if score >= self.matched_threshold:
