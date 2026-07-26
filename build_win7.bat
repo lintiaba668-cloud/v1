@@ -13,6 +13,8 @@ if not "%PYVER%"=="3.8" (
 )
 
 set RELEASE_NAME=PowerRename_Win7_%ARCH%
+set WORK_DIR=.pyinstaller_work_%ARCH%
+set DIST_DIR=.pyinstaller_dist_%ARCH%
 
 echo ==========================================
 echo PowerRename Win7 Portable Build
@@ -50,27 +52,30 @@ if %errorlevel% neq 0 (
 
 echo.
 echo Step 4: Clean previous build
-if exist build rmdir /s /q build
-if exist dist rmdir /s /q dist
+if exist "%WORK_DIR%" rmdir /s /q "%WORK_DIR%"
+if exist "%DIST_DIR%" rmdir /s /q "%DIST_DIR%"
 
 echo.
 echo Step 5: PyInstaller onedir build
-python -m PyInstaller --clean --noconfirm build_win7.spec
+python -m PyInstaller --clean --noconfirm ^
+    --workpath "%WORK_DIR%" ^
+    --distpath "%DIST_DIR%" ^
+    build_win7.spec
 if %errorlevel% neq 0 (
     echo PyInstaller build failed.
     pause
     exit /b 1
 )
 
-if not exist dist\PowerRename\PowerRename.exe (
-    echo EXE not found: dist\PowerRename\PowerRename.exe
+if not exist "%DIST_DIR%\PowerRename\PowerRename.exe" (
+    echo EXE not found: %DIST_DIR%\PowerRename\PowerRename.exe
     pause
     exit /b 1
 )
 
 if not exist release mkdir release
 if exist release\%RELEASE_NAME% rmdir /s /q release\%RELEASE_NAME%
-move dist\PowerRename release\%RELEASE_NAME% >nul
+move "%DIST_DIR%\PowerRename" release\%RELEASE_NAME% >nul
 
 if not exist release\%RELEASE_NAME%\PowerRename.exe (
     echo Release move failed.
