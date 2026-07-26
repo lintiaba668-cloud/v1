@@ -93,8 +93,17 @@ def extract_open_report_name(text):
     """提取开工报告中的工程名称，不允许包含“完成”之前内容。"""
     compact = clean_text(text)
 
-    # 手机照片中“我方完成”可能丢失最后一个字，或被识别成“我完成/方完成”。
-    anchor = r'(?:我方完成|我方完|我完成|方完成|方完)'
+    # 手机照片中“我方完成”可能丢字，或把“完”识别成形近的“究”。
+    anchor = r'(?:我方完成|我方究成|我方完|我完成|方完成|方完)'
+
+    # Preserve line geometry before flattening the OCR text. Sparse-text OCR
+    # often emits the name fragment to the right of "我方完成" either before
+    # or after the anchor line. The compact regex below cannot recover that
+    # reading-order inversion once all newlines have been removed.
+    wrapped = _extract_wrapped_start_name(text, anchor)
+    if wrapped:
+        return wrapped
+
     patterns = (
         anchor + r'(.{5,120}?)(?:项目开工前|目项开工前|项目开工|目项开工|开工前)',
         anchor + r'(.{5,120}?)(?:准备工作|计划于)',
@@ -104,10 +113,84 @@ def extract_open_report_name(text):
         result = re.search(pattern, compact, flags=re.IGNORECASE)
         if result:
             name = _clean_name(result.group(1))
-            if _is_plausible_name(name):
+            if (
+                '项目开工前' not in name
+                and '开工前的各项' not in name
+                and _is_plausible_name(name)
+            ):
                 return name
 
     return _fallback_project_name(text, report_type='start')
+
+
+def _extract_wrapped_start_name(text, anchor):
+    """Recover a start-report name whose visual lines precede the anchor.
+
+    Sparse-text OCR sometimes emits the two long project-name lines before
+    ``我方完成`` even though they are visually to its right. A short
+    ``套工程`` suffix may then appear immediately after the anchor.
+    """
+    lines = split_ocr_lines(text)
+
+    for index, line in enumerate(lines):
+        anchor_match = re.search(anchor, line)
+        if not anchor_match:
+            continue
+
+        fragments = []
+        for offset in (1, 2):
+            position = index - offset
+            if position < 0:
+                break
+            value = lines[position]
+            if value.startswith('致') or value.endswith('有限公司'):
+                break
+            if (
+                not _contains_name_boundary(value)
+                and (
+                    VOLTAGE_PATTERN.search(value)
+                    or any(word in value for word in (
+                        '工程', '线路', '台区', '开闭所', '环网柜',
+                        '分界开关', '配套', '业扩', '改造', '新建',
+                    ))
+                )
+            ):
+                fragments.append(value)
+
+        inline = line[anchor_match.end():]
+        if inline:
+            fragments.append(inline)
+
+        if index + 1 < len(lines):
+            possible_suffix = lines[index + 1]
+            if (
+                len(possible_suffix) <= 30
+                and '工程' in possible_suffix
+                and not possible_suffix.startswith(('项目开工', '目项开工'))
+            ):
+                fragments.append(possible_suffix)
+
+        if not fragments:
+            continue
+
+        # A geographic prefix is stronger than voltage: an inline prefix such
+        # as "福建莆田..." can be followed by the voltage-bearing continuation.
+        # Stable sorting keeps OCR order for the remaining suffix fragments.
+        fragments.sort(
+            key=lambda value: (
+                bool(re.match(
+                    r'^(?:福建|莆田|城厢|荔城|涵江|秀屿|仙游)',
+                    value,
+                )),
+                bool(VOLTAGE_PATTERN.search(value)),
+            ),
+            reverse=True,
+        )
+        name = _clean_name(''.join(fragments))
+        if _is_plausible_name(name):
+            return name
+
+    return ''
 
 
 def extract_completion_name(text):
@@ -175,7 +258,7 @@ def _extract_after_completion_anchor(text):
     """开工报告兜底时也必须丢弃“完成”之前的文字。"""
     compact = clean_text(text)
     match = re.search(
-        r'(?:我方完成|我方完|我完成|方完成|方完)(.+)$',
+        r'(?:我方完成|我方究成|我方完|我完成|方完成|方完)(.+)$',
         compact,
     )
 
@@ -276,6 +359,7 @@ def _clean_name(text):
         '项目编号',
         '编号',
         '我方完成',
+        '我方究成',
         '我方完',
         '我完成',
         '方完成',
@@ -303,7 +387,10 @@ def extract_project_name(text):
 
     if '开工报告' in compact or any(
         marker in compact
-        for marker in ('我方完成', '我方完', '我完成', '方完成', '方完')
+        for marker in (
+            '我方完成', '我方究成', '我方完',
+            '我完成', '方完成', '方完',
+        )
     ):
         name = extract_open_report_name(value)
         if name:

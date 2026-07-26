@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Runtime data and generated OCR artifacts
+logs/
+output/
+temp/
+data/projects.db
+data/projects.db-*
+
+# Local build outputs
+dist/
+release/

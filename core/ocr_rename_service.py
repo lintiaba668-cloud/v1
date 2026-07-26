@@ -1,6 +1,8 @@
 """OCR recognition to standard project matching and file output service."""
 
 from pathlib import Path
+import re
+import unicodedata
 
 from ocr.pipeline_ocr import OCRPipeline
 from core.rename import rename_file
@@ -8,16 +10,32 @@ from project.project_service import ProjectService
 
 
 class OCRRenameService:
-    def __init__(self, output_dir, project_service=None):
+    def __init__(
+        self,
+        output_dir,
+        project_service=None,
+        output_lock=None,
+    ):
         self.output_dir = Path(output_dir)
         self.pipeline = OCRPipeline()
         self.project_service = project_service or ProjectService()
+        self.output_lock = output_lock
 
-    def process(self, image):
+    def process(self, image, recognition_mode='deep'):
         image_path = Path(image)
-        result = self.pipeline.process(image_path)
+        filename_hint = self._filename_project_hint(image_path)
+        result = self.pipeline.process(
+            image_path,
+            recognition_mode=recognition_mode,
+        )
 
         if not result.get('valid'):
+            if filename_hint:
+                return self._rename_from_filename_hint(
+                    image_path,
+                    filename_hint,
+                    result,
+                )
             return {
                 'status': 'failed',
                 'source': str(image_path),
@@ -45,6 +63,29 @@ class OCRRenameService:
         selected_code = match.pop('_selected_ocr_code', '')
 
         if not match.get('auto_accepted'):
+            if (
+                filename_hint
+                and (
+                    not report_type
+                    or report_type == filename_hint['report_type']
+                )
+            ):
+                original = dict(result)
+                original['ocr_project_name'] = (
+                    selected_name
+                    or (name_candidates[0] if name_candidates else '')
+                )
+                original['ocr_project_code'] = (
+                    selected_code
+                    or (code_candidates[0] if code_candidates else '')
+                )
+                original['ocr_project_name_candidates'] = name_candidates
+                original['ocr_project_code_candidates'] = code_candidates
+                return self._rename_from_filename_hint(
+                    image_path,
+                    filename_hint,
+                    original,
+                )
             match_status = match.get('status', 'unmatched')
             return {
                 'status': (
@@ -124,12 +165,70 @@ class OCRRenameService:
             manual_confirmed=False
         )
 
+    def _filename_project_hint(self, image_path):
+        """Read only a strict, previously generated filename convention."""
+        stem = str(Path(image_path).stem or '')
+        report_type = 'finish'
+        if stem.endswith('_开工'):
+            report_type = 'start'
+            stem = stem[:-3]
+
+        if '_' not in stem:
+            return None
+
+        name_hint, code_hint = stem.rsplit('_', 1)
+        code_hint = ''.join(code_hint.split()).upper()
+        if not re.match(r'^[A-Z0-9#-]{8,24}$', code_hint):
+            return None
+
+        finder = getattr(self.project_service, 'find_by_code', None)
+        if not callable(finder):
+            return None
+
+        project = finder(code_hint)
+        if not project:
+            return None
+
+        def normalize_name(value):
+            value = unicodedata.normalize('NFKC', str(value or ''))
+            return re.sub(r'\s+', '', value).casefold()
+
+        if (
+            len(normalize_name(name_hint)) < 8
+            or normalize_name(name_hint)
+            != normalize_name(project.get('project_name', ''))
+        ):
+            return None
+
+        return {
+            'report_type': report_type,
+            'project_name': project.get('project_name', ''),
+            'project_code': project.get('project_code', ''),
+        }
+
+    def _rename_from_filename_hint(self, image_path, hint, original):
+        return self._rename_with_project(
+            image_path=image_path,
+            project_name=hint['project_name'],
+            project_code=hint['project_code'],
+            report_type=hint['report_type'],
+            original=original,
+            match={
+                'match_source': 'verified_filename',
+                'score': 100.0,
+                'margin': 100.0,
+                'reason': 'exact_filename_name_and_code_in_project_library',
+                'candidates': [],
+            },
+            manual_confirmed=False,
+        )
+
     def _match_candidates(self, name_candidates, code_candidates):
         attempts = []
         primary_name = name_candidates[0] if name_candidates else ''
 
-        # Code candidates are evaluated first. Exact or unique one-edit code
-        # matching is substantially safer than accepting raw OCR text.
+        # Code candidates are evaluated first. Exact, business-sequence, or
+        # unique one-edit matching is safer than accepting raw OCR text.
         for code in code_candidates:
             matched = self.project_service.match_project(
                 project_name=primary_name,
@@ -167,6 +266,55 @@ class OCRRenameService:
                 '_selected_ocr_code': '',
             }
 
+        accepted_codes = {}
+        for attempt in attempts:
+            if (
+                attempt.get('auto_accepted')
+                and str(attempt.get('match_source', '')).startswith(
+                    'project_code'
+                )
+                and attempt.get('project_code')
+            ):
+                accepted_codes.setdefault(
+                    attempt['project_code'],
+                    attempt,
+                )
+
+        if len(accepted_codes) > 1:
+            conflicts = list(accepted_codes.values())
+            conflicts.sort(key=self._match_rank, reverse=True)
+            best = conflicts[0]
+            return {
+                'status': 'uncertain',
+                'auto_accepted': False,
+                'match_source': 'project_code_conflict',
+                'reason': 'conflicting_code_candidates',
+                'score': best.get('score', 0.0),
+                'margin': 0.0,
+                'project_code': '',
+                'project_name': '',
+                'suggested_project_code': best.get(
+                    'project_code', ''
+                ),
+                'suggested_project_name': best.get(
+                    'project_name', ''
+                ),
+                'candidates': [
+                    {
+                        'project_code': value.get('project_code', ''),
+                        'project_name': value.get('project_name', ''),
+                        'score': value.get('score', 0.0),
+                    }
+                    for value in conflicts
+                ],
+                '_selected_ocr_name': best.get(
+                    '_selected_ocr_name', ''
+                ),
+                '_selected_ocr_code': best.get(
+                    '_selected_ocr_code', ''
+                ),
+            }
+
         attempts.sort(key=self._match_rank, reverse=True)
         return attempts[0]
 
@@ -178,7 +326,10 @@ class OCRRenameService:
             'unmatched': 1,
         }.get(result.get('status', ''), 0)
         source_rank = {
-            'project_code': 3,
+            'project_code': 4,
+            'project_code_sequence': 3,
+            'project_code_ocr_confusable': 3,
+            'project_code_ocr_degraded': 3,
             'project_code_fuzzy': 2,
             'project_name': 1,
         }.get(result.get('match_source', ''), 0)
@@ -271,12 +422,24 @@ class OCRRenameService:
             filename_code = project_code + '_开工'
             filename_tag = '开工'
 
-        target = rename_file(
-            image_path,
-            self.output_dir,
-            project_name,
-            filename_code
-        )
+        if self.output_lock is None:
+            target = rename_file(
+                image_path,
+                self.output_dir,
+                project_name,
+                filename_code
+            )
+        else:
+            # Keep only the short name-allocation/copy step serialized.
+            # OCR and project matching remain parallel, while duplicate
+            # targets still receive deterministic _2, _3 suffixes.
+            with self.output_lock:
+                target = rename_file(
+                    image_path,
+                    self.output_dir,
+                    project_name,
+                    filename_code
+                )
 
         return {
             'status': 'success',

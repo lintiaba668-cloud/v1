@@ -3,6 +3,7 @@ OCR完整处理链。
 图片 -> 模板字段OCR -> 多候选工程信息 -> Excel匹配/文件命名。
 """
 
+import re
 import traceback
 
 from .ocr_engine import OCREngine
@@ -49,13 +50,26 @@ class OCRPipeline(object):
             return 'start'
 
         if (
-            data.get('project_code')
+            self._plausible_project_code(data.get('project_code', ''))
             or '竣工验收报告' in compact
             or '实际竣工日期' in compact
         ):
             return 'finish'
 
         return ''
+
+    @staticmethod
+    def _plausible_project_code(value):
+        compact = re.sub(r'[^A-Z0-9#\-]', '', str(value or '').upper())
+        core = compact.replace('-', '').replace('#', '')
+        digits = sum(char.isdigit() for char in core)
+        letters = sum(char.isalpha() for char in core)
+        return (
+            8 <= len(core) <= 20
+            and digits >= 6
+            and letters <= 3
+            and 'KV' not in core
+        )
 
     def _merge_result(self, engine_result, region_result, parsed_result):
         engine_name = engine_result.get('project_name', '')
@@ -98,9 +112,12 @@ class OCRPipeline(object):
             'rotation_angle': engine_result.get('rotation_angle', 0),
         }
 
-    def process(self, image):
+    def process(self, image, recognition_mode='deep'):
         try:
-            result = self.engine.recognize(image)
+            result = self.engine.recognize(
+                image,
+                recognition_mode=recognition_mode,
+            )
 
             if not result:
                 return {
@@ -117,6 +134,25 @@ class OCRPipeline(object):
             parsed_result = parse_report_text(text)
             data = self._merge_result(result, region_result, parsed_result)
             data['report_type'] = self._detect_report_type(result, data, text)
+
+            filtered_codes = []
+            for code in data.get('project_code_candidates', []):
+                if (
+                    self._plausible_project_code(code)
+                    and code not in filtered_codes
+                ):
+                    filtered_codes.append(code)
+
+            if data['report_type'] == 'start':
+                # Start reports have no engineering-number field. Dates, pole
+                # numbers and checklist text must never leak into the filename.
+                data['project_code'] = ''
+                data['project_code_candidates'] = []
+            else:
+                data['project_code_candidates'] = filtered_codes
+                data['project_code'] = (
+                    filtered_codes[0] if filtered_codes else ''
+                )
 
             error = result.get('error_message', '')
             report_type = data.get('report_type', '')

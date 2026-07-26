@@ -1,12 +1,26 @@
 """PowerRename OCR parser regression tests."""
 
-from ocr.text_parser import parse_report_text
+from ocr.text_parser import extract_open_report_name, parse_report_text
 
 
 def test_start_report_name():
     text = '我方完成莆田市110kV线路改造工程项目开工前各项准备工作'
     result = parse_report_text(text)
     assert '莆田市110kV线路改造工程' in result.get('project_name', '')
+
+
+def test_start_report_complete_glyph_confusion():
+    text = (
+        '配网工程开工报告\n'
+        '我方究成莆田荔城区220kV上庄变10kV福岭线'
+        '栏山#4变支线#01杆迁改工程\n'
+        '项目开工前的各项准备工作'
+    )
+
+    assert extract_open_report_name(text) == (
+        '莆田荔城区220kV上庄变10kV福岭线'
+        '栏山#4变支线#01杆迁改工程'
+    )
 
 
 def test_finish_report_code_keep_symbol():
@@ -102,6 +116,59 @@ def test_start_name_discards_text_before_completion_anchor_from_real_ocr():
     assert '荔源勘设计' not in name
     assert '察作' not in name
     assert '我完成' not in name
+
+
+def test_start_name_recovers_wrapped_lines_emitted_before_anchor():
+    text = '''
+致：莆田荔源电力勘察设计有限公司：
+杆035B分界开关新装业扩配
+莆田荔城井头变10kV吴江线城龙线#035B
+我方完成
+套工程
+项目开工前的各项准备工作
+'''
+
+    name = extract_open_report_name(text)
+
+    assert name == (
+        '莆田荔城井头变10kV吴江线城龙线'
+        '#035B杆035B分界开关新装业扩配套工程'
+    )
+
+
+def test_start_name_joins_prefix_before_anchor_and_suffix_after_anchor():
+    text = '''
+配网工程开工报告
+致：莆田荔源电力勘察设计有限公司：
+莆田荔城城厢变10kV城镇线双驰环网柜912开关至莆田第四中学配电
+我方完成
+室新建业扩配套工程
+项目开工前的各项准备工作
+'''
+
+    name = extract_open_report_name(text)
+
+    assert name == (
+        '莆田荔城城厢变10kV城镇线双驰环网柜'
+        '912开关至莆田第四中学配电室新建业扩配套工程'
+    )
+
+
+def test_start_name_reorders_suffix_emitted_before_inline_prefix():
+    text = '''
+配网工程开工报告
+致：福建莆田荔源集团有限责任公司：
+宝酒店环网柜业扩配套工程
+我方完成莆田荔城区城南变10kV古城线10kV古城线帝
+项目开工前的各项准备工作
+'''
+
+    name = extract_open_report_name(text)
+
+    assert name == (
+        '莆田荔城区城南变10kV古城线10kV古城线'
+        '帝宝酒店环网柜业扩配套工程'
+    )
 
 
 def test_marked_short_project_code():

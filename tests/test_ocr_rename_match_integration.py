@@ -15,7 +15,7 @@ class FakePipeline:
         self.project_code = project_code
         self.report_type = report_type
 
-    def process(self, _image):
+    def process(self, _image, recognition_mode='deep'):
         return {
             'valid': True,
             'data': {
@@ -35,6 +35,61 @@ class FakeProjectService:
     def match_project(self, project_name='', project_code=''):
         self.calls.append((project_name, project_code))
         return dict(self.result)
+
+
+class RankedProjectService:
+
+    def match_project(self, project_name='', project_code=''):
+        if project_code:
+            return {
+                'status': 'matched',
+                'auto_accepted': True,
+                'match_source': 'project_code_sequence',
+                'reason': 'sequence_suffix_equivalent',
+                'score': 99.0,
+                'margin': 100.0,
+                'project_code': '18132026000102',
+                'project_name': '编号等价工程',
+                'candidates': [],
+            }
+
+        return {
+            'status': 'matched',
+            'auto_accepted': True,
+            'match_source': 'project_name',
+            'reason': 'score_and_margin_passed',
+            'score': 100.0,
+            'margin': 100.0,
+            'project_code': 'WRONG',
+            'project_name': '名称误导工程',
+            'candidates': [],
+        }
+
+
+class FilenameHintProjectService:
+    def __init__(self):
+        self.project = {
+            'project_code': 'C5132026Z015',
+            'project_name': '莆田荔城某迁改工程',
+        }
+
+    def find_by_code(self, code):
+        if code == self.project['project_code']:
+            return dict(self.project)
+        return None
+
+    def match_project(self, project_name='', project_code=''):
+        return {
+            'status': 'unmatched',
+            'auto_accepted': False,
+            'match_source': 'none',
+            'reason': 'empty_ocr_candidates',
+            'score': 0.0,
+            'margin': 0.0,
+            'project_code': '',
+            'project_name': '',
+            'candidates': [],
+        }
 
 
 def test_uncertain_match_does_not_output_file(tmp_path):
@@ -72,6 +127,98 @@ def test_uncertain_match_does_not_output_file(tmp_path):
     assert result['suggested_project_code'] == 'P001'
     assert source.exists()
     assert not output_dir.exists()
+
+
+def test_sequence_code_attempt_outranks_higher_name_score(tmp_path):
+    service = OCRRenameService(
+        tmp_path / 'output',
+        project_service=RankedProjectService(),
+    )
+
+    result = service._match_candidates(
+        name_candidates=['名称误导工程'],
+        code_candidates=['181320260001-1'],
+    )
+
+    assert result['match_source'] == 'project_code_sequence'
+    assert result['project_code'] == '18132026000102'
+
+
+def test_conflicting_exact_code_candidates_require_review(tmp_path):
+    class ConflictingCodeService:
+        def match_project(self, project_name='', project_code=''):
+            if project_code:
+                return {
+                    'status': 'matched',
+                    'auto_accepted': True,
+                    'match_source': 'project_code',
+                    'reason': 'exact_project_code',
+                    'score': 100.0,
+                    'margin': 100.0,
+                    'project_code': project_code,
+                    'project_name': '工程' + project_code,
+                    'candidates': [],
+                }
+            return {
+                'status': 'unmatched',
+                'auto_accepted': False,
+                'match_source': 'none',
+                'reason': 'empty_ocr_project_name',
+                'score': 0.0,
+                'margin': 0.0,
+                'project_code': '',
+                'project_name': '',
+                'candidates': [],
+            }
+
+    service = OCRRenameService(
+        tmp_path / 'output',
+        project_service=ConflictingCodeService(),
+    )
+
+    result = service._match_candidates(
+        name_candidates=[],
+        code_candidates=['CODE001', 'CODE002'],
+    )
+
+    assert result['status'] == 'uncertain'
+    assert not result['auto_accepted']
+    assert result['reason'] == 'conflicting_code_candidates'
+
+
+def test_exact_generated_filename_rescues_failed_ocr(tmp_path):
+    source = (
+        tmp_path
+        / '莆田荔城某迁改工程_C5132026Z015_开工.jpg'
+    )
+    source.write_bytes(b'image')
+    service = OCRRenameService(
+        tmp_path / 'output',
+        project_service=FilenameHintProjectService(),
+    )
+    service.pipeline = FakePipeline(project_name='', project_code='')
+
+    result = service.process(source)
+
+    assert result['status'] == 'success'
+    assert result['match_source'] == 'verified_filename'
+    assert result['project_code'] == 'C5132026Z015'
+    assert result['filename_tag'] == '开工'
+
+
+def test_mismatched_filename_name_is_not_trusted(tmp_path):
+    source = tmp_path / '错误工程_C5132026Z015_开工.jpg'
+    source.write_bytes(b'image')
+    service = OCRRenameService(
+        tmp_path / 'output',
+        project_service=FilenameHintProjectService(),
+    )
+    service.pipeline = FakePipeline(project_name='', project_code='')
+
+    result = service.process(source)
+
+    assert result['status'] == 'unmatched'
+    assert result['match_source'] != 'verified_filename'
 
 
 def test_completion_report_outputs_name_and_code_and_preserves_source(tmp_path):

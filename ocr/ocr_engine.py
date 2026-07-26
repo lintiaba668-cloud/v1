@@ -202,8 +202,9 @@ class OCREngine:
         logger.info('[OCR_SCORE] %s fields=%s', pipeline_result['score'], fields)
         return pipeline_result, executor_result
 
-    def recognize(self, image_path):
+    def recognize(self, image_path, recognition_mode='deep'):
         image_path = Path(image_path)
+        accuracy_mode = recognition_mode != 'fast'
 
         if not self.enabled:
             return OCRResult(
@@ -222,7 +223,10 @@ class OCREngine:
             ).to_dict()
 
         try:
-            template = self.template_recognizer.recognize(image_path)
+            template = self.template_recognizer.recognize(
+                image_path,
+                accuracy_mode=accuracy_mode,
+            )
             report_type = template.get('report_type', '')
             name_candidates = template.get('project_name_candidates', [])
             code_candidates = template.get('project_code_candidates', [])
@@ -259,9 +263,28 @@ class OCREngine:
                     error_code=ErrorCode.SUCCESS,
                 ).to_dict()
 
+            if not accuracy_mode:
+                logger.info(
+                    '[TEMPLATE_OCR] fast mode deferred for accuracy pass'
+                )
+                return OCRResult(
+                    image=str(image_path),
+                    status=OCRStatus.FAILED,
+                    error_code=ErrorCode.IMAGE_PREPROCESS_FAILED,
+                    error_message='快速识别未取得可靠字段',
+                ).to_dict()
+
             logger.info('[TEMPLATE_OCR] no reliable fields; legacy fallback')
 
         except Exception:
+            if not accuracy_mode:
+                logger.exception('[TEMPLATE_OCR] fast mode failed')
+                return OCRResult(
+                    image=str(image_path),
+                    status=OCRStatus.FAILED,
+                    error_code=ErrorCode.IMAGE_PREPROCESS_FAILED,
+                    error_message='快速识别执行失败',
+                ).to_dict()
             logger.exception('[TEMPLATE_OCR] failed; legacy fallback')
 
         return self._recognize_legacy(image_path)

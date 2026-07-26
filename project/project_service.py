@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Project service layer."""
 
+import threading
+
 from core.resource import get_resource_path
 
 from .database import ProjectDatabase
@@ -19,18 +21,56 @@ class ProjectService:
         self.import_manager = ProjectImportManager(db_path)
         self.backup_tool = ProjectBackup()
         self.match_manager = MatchManager(project_service=self)
+        self._cache_lock = threading.RLock()
+        self._projects_cache = None
+        self._project_code_index = None
+
+    def _load_project_cache(self):
+        if self._projects_cache is not None:
+            return
+
+        with self._cache_lock:
+            if self._projects_cache is not None:
+                return
+
+            projects = self.db.list_all()
+            self._projects_cache = projects
+            self._project_code_index = {
+                item.get('project_code', ''): item
+                for item in projects
+                if item.get('project_code')
+            }
+
+    def _invalidate_project_cache(self):
+        with self._cache_lock:
+            self._projects_cache = None
+            self._project_code_index = None
 
     def list_projects(self):
-        return self.db.list_all()
+        self._load_project_cache()
+        return self._projects_cache
 
     def find_by_code(self, code):
-        return self.db.find_by_code(code)
+        if not code:
+            return None
+
+        self._load_project_cache()
+        project = self._project_code_index.get(code)
+        if not project:
+            return None
+
+        return {
+            'project_code': project.get('project_code', ''),
+            'project_name': project.get('project_name', ''),
+        }
 
     def preview_import(self, rows):
         return self.import_manager.preview(rows)
 
     def commit_import(self, items):
-        return self.import_manager.commit(items)
+        count = self.import_manager.commit(items)
+        self._invalidate_project_cache()
+        return count
 
     def match_project(self, project_name='', project_code=''):
         """Match one OCR result against imported project details."""

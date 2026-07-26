@@ -16,8 +16,17 @@ class FinalRunner:
         self.processor = BatchProcessor(self.output_dir)
         self.excel = ExcelResultWriter()
 
-    def run(self, files):
-        results = self.processor.run(files)
+    def run(
+        self,
+        files,
+        progress_callback=None,
+        stage_callback=None,
+    ):
+        results = self.processor.run(
+            files,
+            progress_callback=progress_callback,
+            stage_callback=stage_callback,
+        )
         self.save_results(results)
         return results
 

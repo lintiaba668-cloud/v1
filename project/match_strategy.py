@@ -22,14 +22,16 @@ class PowerProjectMatchStrategy:
         'pole': 7,
         'voltage': 5,
         'keywords': 5,
+        'facility': 15,
     }
 
     PENALTIES = {
         'line_conflict': 25,
         'substation_conflict': 15,
-        'pole_conflict': 30,
+        'pole_conflict': 32,
         'voltage_conflict': 20,
         'keywords_conflict': 10,
+        'facility_conflict': 15,
     }
 
     POWER_KEYWORDS = (
@@ -50,11 +52,10 @@ class PowerProjectMatchStrategy:
         source_fields = self.extract_fields(source_normalized)
         target_fields = self.extract_fields(target_normalized)
 
-        similarity = SequenceMatcher(
-            None,
+        similarity = self._text_similarity(
             source_normalized,
-            target_normalized
-        ).ratio()
+            target_normalized,
+        )
 
         breakdown = {
             'text_similarity': round(
@@ -65,13 +66,15 @@ class PowerProjectMatchStrategy:
                 source_fields['lines'],
                 target_fields['lines'],
                 self.WEIGHTS['line'],
-                self.PENALTIES['line_conflict']
+                self.PENALTIES['line_conflict'],
+                fuzzy_threshold=0.68,
             ),
             'substation': self._field_score(
                 source_fields['substations'],
                 target_fields['substations'],
                 self.WEIGHTS['substation'],
-                self.PENALTIES['substation_conflict']
+                self.PENALTIES['substation_conflict'],
+                fuzzy_threshold=0.7,
             ),
             'pole': self._field_score(
                 source_fields['poles'],
@@ -91,6 +94,13 @@ class PowerProjectMatchStrategy:
                 self.WEIGHTS['keywords'],
                 self.PENALTIES['keywords_conflict']
             ),
+            'facility': self._field_score(
+                source_fields['facilities'],
+                target_fields['facilities'],
+                self.WEIGHTS['facility'],
+                self.PENALTIES['facility_conflict'],
+                fuzzy_threshold=0.8,
+            ),
         }
 
         available_weight = self.WEIGHTS['text_similarity']
@@ -100,6 +110,7 @@ class PowerProjectMatchStrategy:
             ('poles', 'pole'),
             ('voltages', 'voltage'),
             ('keywords', 'keywords'),
+            ('facilities', 'facility'),
         )
 
         for field_name, weight_name in field_weights:
@@ -127,6 +138,7 @@ class PowerProjectMatchStrategy:
             'substations': self._extract_substations(text),
             'poles': self._extract_poles(text),
             'keywords': self._extract_keywords(text),
+            'facilities': self._extract_facilities(text),
         }
 
     def _extract_voltages(self, text):
@@ -137,10 +149,14 @@ class PowerProjectMatchStrategy:
         return sorted(set(value.lower() + 'kv' for value in values))
 
     def _extract_named_suffixes(self, text, suffix, max_length):
+        quantifier = (
+            r'{1,' + str(max_length) + r'}?'
+            if suffix == '线'
+            else r'{1,' + str(max_length) + r'}'
+        )
         pattern = (
-            r'[\u4e00-\u9fffA-Za-z0-9#\-]{1,'
-            + str(max_length)
-            + r'}'
+            r'[\u4e00-\u9fffA-Za-z0-9#\-]'
+            + quantifier
             + re.escape(suffix)
         )
         candidates = re.findall(pattern, text)
@@ -148,7 +164,7 @@ class PowerProjectMatchStrategy:
 
         for value in candidates:
             value = re.sub(
-                r'^.*?\d{1,3}(?:\.\d+)?[kK][vV]',
+                r'^.*\d{1,3}(?:\.\d+)?[kK][vV]',
                 '',
                 value
             )
@@ -165,6 +181,10 @@ class PowerProjectMatchStrategy:
         for value in candidates:
             if re.match(r'^#?\d+变$', value):
                 continue
+            if '线' in value:
+                continue
+            if value.endswith(('公变', '配变', '箱式变')):
+                continue
             result.append(value)
 
         return sorted(set(result))
@@ -180,7 +200,63 @@ class PowerProjectMatchStrategy:
             if keyword in text
         ))
 
-    def _field_score(self, source_values, target_values, reward, penalty):
+    def _extract_facilities(self, text):
+        """Return suffix variants for named distribution facilities.
+
+        OCR often corrupts the city prefix while preserving a distinctive
+        facility such as "坑边开闭所".  Suffix variants retain that stable
+        anchor without treating the generic word "开闭所" alone as a match.
+        """
+        facilities = set()
+        suffixes = ('开闭所', '环网柜', '配电室', '箱式变', '公变')
+
+        for suffix in suffixes:
+            pattern = (
+                r'([\u4e00-\u9fffA-Za-z0-9#\-]{2,12})'
+                + re.escape(suffix)
+            )
+            for prefix in re.findall(pattern, text):
+                for length in range(2, min(6, len(prefix)) + 1):
+                    facilities.add(prefix[-length:] + suffix)
+
+        return sorted(facilities)
+
+    def _text_similarity(self, source, target):
+        source_comparable = self._comparison_text(source)
+        target_comparable = self._comparison_text(target)
+
+        if not source_comparable or not target_comparable:
+            return 0.0
+
+        return SequenceMatcher(
+            None,
+            source_comparable,
+            target_comparable,
+        ).ratio()
+
+    @staticmethod
+    def _comparison_text(value):
+        # Preserve domain notation while removing long Latin OCR garbage.
+        text = re.sub(
+            r'(?i)(\d{1,3})k[vY]',
+            r'\1千伏',
+            str(value),
+        )
+        text = re.sub(r'[A-Za-z]{2,}', '', text)
+        return re.sub(
+            r'[^\u4e00-\u9fff0-9#ⅠⅡⅢⅣⅤ\-]',
+            '',
+            text,
+        )
+
+    def _field_score(
+        self,
+        source_values,
+        target_values,
+        reward,
+        penalty,
+        fuzzy_threshold=None,
+    ):
         source_set = set(source_values)
         target_set = set(target_values)
 
@@ -192,6 +268,15 @@ class PowerProjectMatchStrategy:
 
         if source_set & target_set:
             return reward
+
+        if fuzzy_threshold is not None:
+            best_similarity = max(
+                SequenceMatcher(None, source, target).ratio()
+                for source in source_set
+                for target in target_set
+            )
+            if best_similarity >= fuzzy_threshold:
+                return round(reward * best_similarity, 2)
 
         return -penalty
 
@@ -205,6 +290,7 @@ class PowerProjectMatchStrategy:
                 'pole': 0,
                 'voltage': 0,
                 'keywords': 0,
+                'facility': 0,
             },
             'available_weight': self.WEIGHTS['text_similarity'],
             'source_normalized': source_normalized,

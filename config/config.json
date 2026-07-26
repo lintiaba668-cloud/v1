@@ -1,0 +1,7 @@
+{
+    "ocr_path": "engine/tesseract.exe",
+    "tessdata_path": "engine/tessdata",
+    "output_dir": "output",
+    "overwrite": false,
+    "log_level": "INFO"
+}
